@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>福瑞快打</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="stage">
+    <canvas id="game" width="450" height="800"></canvas>
+
+    <!-- 局内暂停按钮 -->
+    <button id="btn-pause" class="ingame-btn hidden" title="暂停 / 设置">
+      <svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></svg>
+    </button>
+
+    <!-- 主动技能（右下角） -->
+    <div class="skill-bar">
+      <button id="skill-slow" class="skill-btn hidden" title="时缓">时缓</button>
+    </div>
+
+    <!-- 登录 / 注册 -->
+    <div id="login" class="overlay">
+      <div class="panel">
+        <h1>福瑞快打</h1>
+        <div class="login-form">
+          <input id="login-user" type="text" placeholder="用户名" autocomplete="off">
+          <input id="login-pass" type="password" placeholder="密码">
+          <input id="login-pass2" type="password" placeholder="确认密码" class="hidden">
+          <div class="login-actions">
+            <button id="btn-login">登录</button>
+            <button id="btn-register" class="ghost">注册</button>
+            <button id="btn-back" class="ghost hidden">返回登录</button>
+          </div>
+          <div id="login-error" class="login-error"></div>
+          <p class="tip">首次使用请点击「注册」，输入用户名与密码后完成注册</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 主菜单：主页 + 子页面 -->
+    <div id="menu" class="overlay hidden">
+      <div class="panel menu-panel">
+        <!-- 主页 -->
+        <div id="tab-home" class="tab-panel active">
+          <div class="home-head">
+            <div class="user-chip"><span class="dot"></span><span id="home-user">玩家</span></div>
+            <div class="head-actions">
+              <button class="tab coin-badge" data-tab="coin" title="查看金币获取方式">
+                <svg viewBox="0 0 24 24" class="coin-ico"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10h5M9.5 14h5"/></svg>
+                <span id="coin-count">0</span>
+              </button>
+              <button class="tab icon-btn" data-tab="setting" title="设置">
+                <svg viewBox="0 0 24 24" class="nav-ico"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="hero">
+            <div class="hero-glow"></div>
+            <h1 class="hero-title">福瑞快打</h1>
+            <p class="hero-sub">无尽模式 · 生存波次</p>
+          </div>
+
+          <button class="tab char-stage" data-tab="char">
+            <canvas id="char-preview" width="240" height="200"></canvas>
+            <span class="char-tag">点击自定义角色</span>
+          </button>
+
+          <button id="btn-play" class="btn-primary">开始游戏</button>
+
+          <p class="dim home-best">最佳波次：<span id="best-wave">0</span></p>
+
+          <div class="home-nav">
+            <button class="tab nav-btn" data-tab="equip">
+              <svg viewBox="0 0 24 24" class="nav-ico"><path d="M12 3l2 4v6l-2 3-2-3V7z"/><path d="M8 12h8"/></svg>
+              <span>装备</span>
+            </button>
+            <button class="tab nav-btn" data-tab="pet">
+              <svg viewBox="0 0 24 24" class="nav-ico"><ellipse cx="12" cy="13" rx="6" ry="8"/></svg>
+              <span>宠物</span>
+            </button>
+            <button class="tab nav-btn" data-tab="bag">
+              <svg viewBox="0 0 24 24" class="nav-ico"><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>
+              <span>背包</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 角色个性化 -->
+        <div id="tab-char" class="tab-panel">
+          <div class="sub-head">
+            <h3>角色个性化</h3>
+            <button class="tab nav-back" data-tab="home">返回</button>
+          </div>
+          <div class="char-edit">
+            <canvas id="char-preview2" width="260" height="190"></canvas>
+            <div class="char-opts" id="char-opts"></div>
+          </div>
+        </div>
+
+        <!-- 装备 -->
+        <div id="tab-equip" class="tab-panel">
+          <div class="sub-head">
+            <h3>装备</h3>
+            <button class="tab nav-back" data-tab="home">返回</button>
+          </div>
+          <div class="sec-title">武器</div>
+          <div id="list-weapons"></div>
+          <div class="sec-title">护甲 / 饰品</div>
+          <div id="list-equipment"></div>
+          <div class="sec-title">物品</div>
+          <div id="list-items"></div>
+        </div>
+
+        <!-- 宠物 -->
+        <div id="tab-pet" class="tab-panel">
+          <div class="sub-head">
+            <h3>宠物养成</h3>
+            <button class="tab nav-back" data-tab="home">返回</button>
+          </div>
+          <div class="char-stage" id="pet-stage">
+            <canvas id="pet-preview" width="240" height="180"></canvas>
+            <span class="char-tag" id="pet-tag">宠物预览</span>
+          </div>
+          <div class="opt-group">
+            <div class="opt-name">选择宠物</div>
+            <div class="chip-row" id="pet-select"></div>
+          </div>
+          <div id="pet-dev"></div>
+          <div class="sec-title">宠物解锁 / 装备</div>
+          <div id="list-pets"></div>
+        </div>
+
+        <!-- 背包 -->
+        <div id="tab-bag" class="tab-panel">
+          <div class="sub-head">
+            <h3>背包</h3>
+            <button class="tab nav-back" data-tab="home">返回</button>
+          </div>
+          <div id="list-bag"></div>
+        </div>
+
+        <!-- 金币 -->
+        <div id="tab-coin" class="tab-panel">
+          <div class="sub-head">
+            <h3>金币与获取方式</h3>
+            <button class="tab nav-back" data-tab="home">返回</button>
+          </div>
+          <div class="coin-total">当前金币 <span id="coin-count2">0</span></div>
+          <div class="sec-title">获取方式</div>
+          <div class="item-row">
+            <div class="item-info"><div class="item-name">击败小怪</div><div class="item-desc">普通 / 快速 / 远程怪</div></div>
+            <span class="coin-get">+1</span>
+          </div>
+          <div class="item-row">
+            <div class="item-info"><div class="item-name">击败精英怪</div><div class="item-desc">每 5 波出现，带护盾</div></div>
+            <span class="coin-get">+5</span>
+          </div>
+          <div class="item-row">
+            <div class="item-info"><div class="item-name">击败 Boss</div><div class="item-desc">每 10 波出现</div></div>
+            <span class="coin-get">+50</span>
+          </div>
+          <p class="dim coin-note">金币在每局结算时累加并保存到账号，用于解锁武器、护甲与宠物。</p>
+        </div>
+
+        <!-- 设置 -->
+        <div id="tab-setting" class="tab-panel">
+          <div class="sub-head">
+            <h3>设置</h3>
+            <button class="tab nav-back" data-tab="home">返回</button>
+          </div>
+          <label class="setting-row"><input type="checkbox" id="opt-sound" checked> 音效</label>
+          <div class="disp-settings"></div>
+          <button id="btn-reset" class="ghost">重置进度</button>
+          <button id="btn-logout" class="ghost">退出登录</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 开场动画 -->
+    <div id="intro" class="overlay hidden">
+      <div class="intro-inner">
+        <div class="intro-scan"></div>
+        <div class="intro-ring"></div>
+        <div class="intro-title">福瑞快打</div>
+        <div class="intro-sub">无尽模式 · 生存波次</div>
+        <div class="intro-hint">点击任意处跳过</div>
+      </div>
+    </div>
+
+    <!-- 局内暂停 / 设置 -->
+    <div id="pause" class="overlay hidden">
+      <div class="panel">
+        <h2>暂停</h2>
+        <p class="dim" id="pause-stats">对局时长 00:00</p>
+        <button id="btn-resume" class="btn-primary">继续游戏</button>
+        <button id="btn-newgame" class="ghost">新游戏</button>
+        <div class="disp-settings"></div>
+        <button id="btn-quit" class="ghost">返回主菜单</button>
+        <p class="dim">返回主菜单会保留本局进度，下次点「开始游戏」可直接回来</p>
+      </div>
+    </div>
+
+    <!-- 升级面板 -->
+    <div id="upgrade" class="overlay hidden">
+      <div class="panel">
+        <h2 id="upgrade-title">选择升级</h2>
+        <div id="upgrade-cards"></div>
+        <button id="btn-reroll" class="ghost">重掷</button>
+      </div>
+    </div>
+
+    <!-- 游戏结束 -->
+    <div id="gameover" class="overlay hidden">
+      <div class="panel">
+        <h2>游戏结束</h2>
+        <p id="go-stats"></p>
+        <p class="dim">本局获得金币：<span id="go-coins">0</span></p>
+        <button id="btn-restart">再来一局</button>
+        <button id="btn-change" class="ghost">返回主菜单</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/game.js"></script>
+</body>
+</html>
