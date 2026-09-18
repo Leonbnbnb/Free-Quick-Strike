@@ -6,13 +6,14 @@
   <title>福瑞快打</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="themes.css">
 </head>
 <body>
   <div id="stage">
     <canvas id="game" width="450" height="800"></canvas>
 
     <!-- 局内暂停按钮 -->
-    <button id="btn-pause" class="ingame-btn hidden" title="暂停 / 设置">
+    <button id="btn-pause" class="ingame-btn hidden" title="暂停 / 设置" aria-label="暂停 / 设置">
       <svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></svg>
     </button>
 
@@ -23,18 +24,21 @@
 
     <!-- 登录 / 注册 -->
     <div id="login" class="overlay">
-      <div class="panel">
+      <div class="panel login-panel">
+        <div class="eyebrow">FURRY STRIKE · 无尽冒险</div>
+        <div class="brand-mark" aria-hidden="true">✦</div>
         <h1>福瑞快打</h1>
+        <p class="login-sub">集结小队，闯入未知。</p>
         <div class="login-form">
-          <input id="login-user" type="text" placeholder="用户名" autocomplete="off">
-          <input id="login-pass" type="password" placeholder="密码">
-          <input id="login-pass2" type="password" placeholder="确认密码" class="hidden">
+          <input id="login-user" type="text" placeholder="用户名" aria-label="用户名" autocomplete="username">
+          <input id="login-pass" type="password" placeholder="密码" aria-label="密码" autocomplete="current-password">
+          <input id="login-pass2" type="password" placeholder="确认密码" aria-label="确认密码" autocomplete="new-password" class="hidden">
           <div class="login-actions">
             <button id="btn-login">登录</button>
             <button id="btn-register" class="ghost">注册</button>
             <button id="btn-back" class="ghost hidden">返回登录</button>
           </div>
-          <div id="login-error" class="login-error"></div>
+          <div id="login-error" class="login-error" role="status"></div>
           <p class="tip">首次使用请点击「注册」，输入用户名与密码后完成注册</p>
         </div>
       </div>
@@ -60,18 +64,21 @@
 
           <div class="hero">
             <div class="hero-glow"></div>
+            <div class="eyebrow">FURRY STRIKE</div>
             <h1 class="hero-title">福瑞快打</h1>
-            <p class="hero-sub">无尽模式 · 生存波次</p>
+            <p class="hero-sub">小小勇士，无尽冒险。</p>
           </div>
 
           <button class="tab char-stage" data-tab="char">
+            <span class="stage-caption">你的冒险者 <span>✦ READY</span></span>
             <canvas id="char-preview" width="240" height="200"></canvas>
-            <span class="char-tag">点击自定义角色</span>
+            <span class="char-tag">定制外观 <span aria-hidden="true">↗</span></span>
           </button>
 
+          <div class="mission-strip"><span class="mission-symbol" aria-hidden="true">✧</span><div><strong>暮色森林</strong><span>无尽生存 · 每 10 波迎战首领</span></div><span class="mission-status">探索中</span></div>
           <button id="btn-play" class="btn-primary">开始游戏</button>
 
-          <p class="dim home-best">最佳波次：<span id="best-wave">0</span></p>
+          <p class="dim home-best">最高纪录 <strong id="best-wave">0</strong> 波 <span>·</span> 每一局，都是新的可能</p>
 
           <div class="home-nav">
             <button class="tab nav-btn" data-tab="equip">
@@ -87,6 +94,7 @@
               <span>背包</span>
             </button>
           </div>
+          <p class="control-hint"><span>W A S D / 方向键</span> 移动 <i>·</i> 触屏拖动 <i>·</i> 自动攻击</p>
         </div>
 
         <!-- 角色个性化 -->
@@ -173,6 +181,12 @@
             <button class="tab nav-back" data-tab="home">返回</button>
           </div>
           <label class="setting-row"><input type="checkbox" id="opt-sound" checked> 音效</label>
+          <section class="theme-settings" aria-labelledby="theme-title">
+            <div class="sec-title" id="theme-title">界面主题</div>
+            <p class="dim">仅局外可切换，自动保存到当前账号。局内花草、建筑与地形保持原样。</p>
+            <div id="theme-options" class="theme-options"></div>
+            <p id="theme-status" class="dim" role="status"></p>
+          </section>
           <div class="disp-settings"></div>
           <button id="btn-reset" class="ghost">重置进度</button>
           <button id="btn-logout" class="ghost">退出登录</button>
@@ -194,7 +208,8 @@
     <!-- 局内暂停 / 设置 -->
     <div id="pause" class="overlay hidden">
       <div class="panel">
-        <h2>暂停</h2>
+        <div class="eyebrow">TAKE A BREATH</div>
+        <h2>稍作休整</h2>
         <p class="dim" id="pause-stats">对局时长 00:00</p>
         <button id="btn-resume" class="btn-primary">继续游戏</button>
         <button id="btn-newgame" class="ghost">新游戏</button>
@@ -207,7 +222,9 @@
     <!-- 升级面板 -->
     <div id="upgrade" class="overlay hidden">
       <div class="panel">
+        <div class="eyebrow">CHOOSE YOUR POWER</div>
         <h2 id="upgrade-title">选择升级</h2>
+        <p class="panel-sub">每一次选择，都让小队更强。</p>
         <div id="upgrade-cards"></div>
         <button id="btn-reroll" class="ghost">重掷</button>
       </div>
@@ -216,10 +233,11 @@
     <!-- 游戏结束 -->
     <div id="gameover" class="overlay hidden">
       <div class="panel">
-        <h2>游戏结束</h2>
+        <div class="eyebrow">ADVENTURE COMPLETE</div>
+        <h2>冒险暂告一段落</h2>
         <p id="go-stats"></p>
         <p class="dim">本局获得金币：<span id="go-coins">0</span></p>
-        <button id="btn-restart">再来一局</button>
+        <button id="btn-restart" class="btn-primary">再来一局</button>
         <button id="btn-change" class="ghost">返回主菜单</button>
       </div>
     </div>

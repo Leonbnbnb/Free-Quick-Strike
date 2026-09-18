@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>福瑞快打 · 视觉回归测试</title>
+<style>
+  body { margin: 0; background: #081a20; color: #d8e6d7; font: 13px system-ui; }
+  header { padding: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button, select { background: #26453f; color: #e9dfc0; border: 1px solid #658477; padding: 7px 10px; border-radius: 6px; }
+  iframe { display: block; border: 1px solid #405d51; margin: 0 auto 20px; }
+  #report { white-space: pre-wrap; padding: 0 16px 12px; color: #b7d9a3; }
+</style>
+<header>
+  <strong>隔离存档测试台</strong>
+  <select id="size" aria-label="测试尺寸"><option value="390,844">390 × 844 手机</option><option value="320,568">320 × 568 小屏</option><option value="900,450">900 × 450 横屏</option></select>
+  <button data-scene="home">首页</button><button data-scene="combat">战斗</button><button data-scene="upgrade">六选升级</button><button data-scene="boss">首领奖励</button><button data-scene="pause">暂停</button><button data-scene="gameover">结算</button><button data-scene="checks">运行检查</button>
+</header>
+<div id="report" role="status">正在加载测试存档…</div>
+<iframe id="game-frame" title="游戏预览" width="390" height="844"></iframe>
+<script>
+  const frame = document.getElementById('game-frame');
+  window.reportVisual = text => document.getElementById('report').textContent = text;
+  fetch('../index.html').then(r => r.text()).then(html => {
+    const setup = '<base href="../"><script>window.visualSavedUsers=null;window.furyStore={load:()=>window.visualSavedUsers||[{username:"视觉测试",meta:{}}],save:v=>{window.visualSavedUsers=JSON.parse(JSON.stringify(v));}};window.addEventListener("error",e=>parent.reportVisual("FAIL: "+e.message));window.addEventListener("unhandledrejection",e=>parent.reportVisual("FAIL: "+e.reason));<\/script>';
+    frame.srcdoc = html.replace('<head>', '<head>' + setup).replace('</body>', '<script src="tests/visual-smoke.js"><\/script></body>');
+  });
+  document.querySelectorAll('[data-scene]').forEach(button => button.onclick = () => frame.contentWindow.visualScene(button.dataset.scene));
+  document.getElementById('size').onchange = e => {
+    const [w,h] = e.target.value.split(','); frame.width = w; frame.height = h;
+    frame.contentWindow.visualOrientation(Number(w) > Number(h));
+  };
+</script>
+</html>

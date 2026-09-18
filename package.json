@@ -18,8 +18,10 @@
     "files": [
       "index.html",
       "style.css",
+      "themes.css",
       "js/**/*",
       "icon.svg",
+      "assets/**/*",
       "electron/**/*"
     ],
     "directories": {
