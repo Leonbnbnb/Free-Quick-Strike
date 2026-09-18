@@ -2,7 +2,7 @@
 
 一款 Canvas 2D 无尽波次生存 Roguelite。你指挥一支小兵小队自动开火，靠局内升级把武器、元素、召唤物、宠物四条路线组合成 Build，一路抵挡不断增强的怪潮与 Boss。
 
-支持两种运行方式：Electron 桌面版，以及浏览器开发版。
+支持三种运行方式：Electron 桌面版、浏览器开发版，以及部署到 Vercel 的线上版（账号存档走 Supabase）。
 
 ## 玩法概览
 
@@ -38,6 +38,20 @@ node server.js
 
 `server.js` 同时提供 `/api/users` 账号存档接口（落盘到 `data/users.json`）；若只是纯静态托管，存档会自动退回浏览器 localStorage。
 
+### 线上版（Vercel + Supabase）
+
+前端静态资源托管在 Vercel，账号存档由 Serverless Function `api/users.js` 写入 Supabase。
+
+1. 在 Supabase 建项目，执行 [supabase/migrations/0001_users.sql](supabase/migrations/0001_users.sql) 建表（`users` 表 + RLS）。
+2. 在 Vercel 项目的 Settings → Environment Variables 配置（**不要**提交到仓库）：
+   - `SUPABASE_URL`：Supabase 项目 URL，形如 `https://<project-ref>.supabase.co`
+   - `SUPABASE_SERVICE_ROLE_KEY`：secret / service_role 密钥，仅服务端使用
+3. 部署：仓库连到 Vercel 后 `main` 分支自动构建，或本地执行 `vercel --prod`。
+
+> 存档安全：前端从不直连数据库，`anon` / `authenticated` 角色已被收回权限，只有服务端密钥能读写。
+>
+> 环境变量变更后需要重新部署才会生效。
+
 ## 目录结构
 
 ```
@@ -64,7 +78,7 @@ build/  icon.svg           图标与打包资源
 - 纯前端 Canvas 2D，**无运行时第三方依赖**；渲染按设备像素比缩放，适配竖屏 / 横屏
 - 音效全部由 WebAudio 实时合成（噪声 + 滤波扫频 + 包络），不依赖任何音频素材
 - 伤害分为子弹 / 元素 / 召唤物 / 宠物四个独立乘区，每个乘区内部是「加算区 × 独立乘区」
-- 存档三通道：Electron 文件读写 → `/api/users` → localStorage，逐级降级
+- 存档三通道：Electron 文件读写 → `/api/users` → localStorage，逐级降级；`/api/users` 线上由 Vercel + Supabase 实现，本地由 `server.js` + 文件实现
 
 界面回归：启动开发服务器后访问 `http://localhost:8080/tests/visual-smoke.html`，点击「运行检查」；可切换手机、小屏和横屏尺寸，以及首页、战斗、六选升级、首领奖励、暂停与结算场景。
 
