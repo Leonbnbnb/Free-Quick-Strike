@@ -79,6 +79,7 @@
           <button id="btn-play" class="btn-primary">开始游戏</button>
 
           <p class="dim home-best">最高纪录 <strong id="best-wave">0</strong> 波 <span>·</span> 每一局，都是新的可能</p>
+          <p id="sync-hint" class="dim sync-hint hidden" role="status"></p>
 
           <div class="home-nav">
             <button class="tab nav-btn" data-tab="equip">
@@ -206,26 +207,44 @@
             <p id="theme-status" class="dim" role="status"></p>
           </section>
 
-          <!-- 测试模式：在音效开关上连续切换 10 次解锁，仅对当前账号生效 -->
-          <section id="test-mode" class="test-mode hidden" aria-labelledby="test-mode-title">
-            <div class="sec-title" id="test-mode-title">测试模式</div>
+          <!-- 开发者模式：设置页连续切换音效 10 次后需输入密码进入，仅对当前账号生效 -->
+          <section id="dev-gate" class="dev-gate hidden" aria-labelledby="dev-gate-title">
+            <div class="sec-title" id="dev-gate-title">开发者模式</div>
+            <label class="setting-row">密码 <input type="password" id="dev-pass" autocomplete="off" aria-label="开发者模式密码"></label>
+            <div class="dev-gate-actions">
+              <button id="dev-enter" class="ghost">进入</button>
+              <button id="dev-cancel" class="ghost">取消</button>
+            </div>
+            <p id="dev-gate-status" class="dim" role="status"></p>
+          </section>
+
+          <section id="dev-mode" class="dev-mode hidden" aria-labelledby="dev-mode-title">
+            <div class="sec-title" id="dev-mode-title">开发者模式</div>
             <p class="dim">仅供调试，改动即时保存到当前账号。</p>
 
-            <label class="setting-row">金币 <input type="number" id="test-coins" min="0" step="100" inputmode="numeric"></label>
-            <label class="setting-row">最佳波次 <input type="number" id="test-bestwave" min="0" step="1" inputmode="numeric"></label>
-            <button id="test-apply-basic" class="ghost">应用金币 / 波次</button>
+            <label class="setting-row">金币 <input type="number" id="dev-coins" min="0" step="100" inputmode="numeric"></label>
+            <label class="setting-row">最佳波次 <input type="number" id="dev-bestwave" min="0" step="1" inputmode="numeric"></label>
+            <button id="dev-apply-basic" class="ghost">应用金币 / 波次</button>
 
-            <button id="test-unlock-all" class="ghost">一键解锁全部</button>
+            <button id="dev-unlock-all" class="ghost">一键解锁全部</button>
 
             <div class="sec-title">宠物养成</div>
-            <label class="setting-row">宠物 <select id="test-pet"></select></label>
-            <label class="setting-row">等级 <input type="number" id="test-pet-lv" min="1" step="1" inputmode="numeric"></label>
-            <label class="setting-row">星级 <input type="number" id="test-pet-star" min="1" step="1" inputmode="numeric"></label>
-            <label class="setting-row">碎片 <input type="number" id="test-pet-shards" min="0" step="1" inputmode="numeric"></label>
-            <button id="test-apply-pet" class="ghost">应用宠物数据</button>
-            <button id="test-max-pet" class="ghost">宠物全部拉满</button>
+            <label class="setting-row">宠物 <select id="dev-pet"></select></label>
+            <label class="setting-row">等级 <input type="number" id="dev-pet-lv" min="1" step="1" inputmode="numeric"></label>
+            <label class="setting-row">星级 <input type="number" id="dev-pet-star" min="1" step="1" inputmode="numeric"></label>
+            <label class="setting-row">碎片 <input type="number" id="dev-pet-shards" min="0" step="1" inputmode="numeric"></label>
+            <button id="dev-apply-pet" class="ghost">应用宠物数据</button>
+            <button id="dev-max-pet" class="ghost">宠物全部拉满</button>
 
-            <p id="test-status" class="dim" role="status"></p>
+            <div class="sec-title">存档</div>
+            <p id="dev-info" class="dim"></p>
+            <button id="dev-clear-run" class="ghost">清空未结束对局</button>
+            <textarea id="dev-json" class="dev-json" rows="4" spellcheck="false" aria-label="存档 JSON" placeholder="点「导出存档」把当前存档填进来，改完点「导入存档」覆盖"></textarea>
+            <button id="dev-export" class="ghost">导出存档</button>
+            <button id="dev-import" class="ghost">导入存档</button>
+            <button id="dev-exit" class="ghost">退出开发者模式</button>
+
+            <p id="dev-status" class="dim" role="status"></p>
           </section>
 
           <div class="disp-settings"></div>

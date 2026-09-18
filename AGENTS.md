@@ -24,7 +24,7 @@
 ## 3. 提交约定
 
 - 提交信息用中文，首行 `类型: 概要`（`feat` / `fix` / `balance` / `docs` / `perf`），正文按系统分条列要点，写清「旧 → 新」。
-- 不要提交 `node_modules/`、`dist/`、`data/users.json`（已由 `.gitignore` 排除）。
+- 不要提交 `node_modules/`、`dist/`、`data/`（已由 `.gitignore` 排除）。
 - 推送前跑一遍 `git status` 确认没有多余的运行期文件被带进去。
 
 ## 4. 代码结构速查
@@ -32,6 +32,7 @@
 - `js/game.js`：全部游戏逻辑与渲染（单文件）。关键区块：
   - `WEAPON_DEFS` / `ELEMENT_DEFS` / `SUMMON_DEFS` / `PET_DEFS`：四条线的**基础数值定义**（改数值先看这里）
   - `EVOLUTIONS`：进化（前置 `req()` + 效果 `apply()`）
+  - `DEV_PASSWORD_HASH` / `SOUND_TAP_UNLOCK`：**开发者模式**（设置页连按音效若干次后需输入密码）的口令哈希与触发次数。改密码就换这个 SHA-256 常量，**不要把明文写进任何文件**；机制说明见 `docs/需求方案.md` 的 10.6
   - `buildUpgradePool()`：升级卡池（动态生成，含所有前置条件与权重）
   - `updateWeapons` / `triggerFireball` / `triggerLightning` / `updateIce` / `updateScythe` / `updateSword`：各条线的行为与命中判定
   - `draw*` 系列：表现层（视觉改动集中在这里）

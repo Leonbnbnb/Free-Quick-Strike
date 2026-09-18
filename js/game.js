@@ -792,9 +792,11 @@ const SHOP = {
 let state = 'menu'; // menu | playing | upgrade | bossreward | gameover
 let runCoins = 0;   // 本局获得金币
 let petMsg = '';    // 宠物养成页的最近一次操作反馈（抽蛋/升星）
-let soundTapCount = 0;        // 隐藏测试模式：音效开关的连续切换计数
-let testPanelShown = false;   // 测试面板是否已填充（避免覆盖正在输入的值）
-const SOUND_TAP_UNLOCK = 10;  // 连续切换多少次解锁测试模式
+let soundTapCount = 0;        // 开发者模式入口：音效开关的连续切换计数
+let devPanelShown = false;    // 开发者面板是否已填充（避免覆盖正在输入的值）
+const SOUND_TAP_UNLOCK = 10;  // 连续切换多少次弹出密码验证
+// 进入开发者模式的密码只存 SHA-256，仓库与文档都不写明文；改密码时用新的 sha256 替换这个值即可。
+const DEV_PASSWORD_HASH = '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918';
 
 // 局外进度（按用户持久化到 localStorage）
 let users = [];
@@ -923,13 +925,17 @@ function defaultMeta() {
     character: defaultCharacter(),
     settings: { sound: true, orient: 'portrait', fps: 0, effects: 'full', theme: 'forest' },
     bestWave: 0,
-    testMode: false,     // 隐藏测试模式：在音效开关上连续切换 10 次解锁
+    devMode: false,      // 开发者模式：设置页连续切换音效 10 次后输入密码进入
     run: null,           // 上把未结束的进度快照（返回主菜单时保存）
   };
 }
 
 // 兼容旧存档：补齐新增字段
 function normalizeMeta(m) {
+  if (typeof m.coins !== 'number') m.coins = 0;
+  if (typeof m.bestWave !== 'number') m.bestWave = 0;
+  if (m.run === undefined) m.run = null;
+  if (m.devMode === undefined) m.devMode = false;
   if (!m.character) m.character = defaultCharacter();
   if (!m.settings) m.settings = { sound: true, orient: 'portrait', fps: 0 };
   if (!m.settings.effects) m.settings.effects = 'full';
@@ -1127,52 +1133,116 @@ function saveUsers() {
   try { localStorage.setItem(USERS_KEY, JSON.stringify(users)); } catch (e) {}
 }
 
-// HTTP 通道：注册 / 改密。明文口令只在 HTTPS 上传输一次，哈希由服务端负责。
-// createOnly=true 交给数据库主键原子判重，账号已存在时返回 false（服务端 409）。
-function pushAccount(user, createOnly) {
+// ==================== 会话令牌与在线存档同步 ====================
+// 令牌由服务端在登录 / 注册时下发，存在浏览器里；存档写入与成绩提交都靠它证明身份。
+const TOKEN_KEY = 'fury_token';
+
+function token() {
+  try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+}
+
+function setToken(t) {
+  try {
+    if (t) localStorage.setItem(TOKEN_KEY, t);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch (e) {}
+}
+
+function apiError(status, message) {
+  const e = new Error(message || `HTTP ${status}`);
+  e.status = status;
+  return e;
+}
+
+function apiFail(r) {
+  return r.json().catch(() => ({})).then(d => apiError(r.status, d && d.error));
+}
+
+// 令牌失效（改密、过期、被换过）：退回登录页
+function sessionExpired(msg) {
+  setToken('');
+  currentUser = null;
+  meta = defaultMeta();
+  try { localStorage.removeItem('fury_current_user'); } catch (e) {}
+  showLogin();
+  loginError(msg || '登录已失效，请重新登录');
+}
+
+// 本机存档镜像：每次 saveMeta 都会先写这里，云端同步失败时用它兜底
+function metaCacheKey(username) { return `fury_meta_${username || currentUser}`; }
+
+function readMetaCache(username) {
+  try { return JSON.parse(localStorage.getItem(metaCacheKey(username)) || 'null'); } catch (e) { return null; }
+}
+
+// 服务端存档比本机镜像旧（上次没同步上去）时，问用户要不要用本机这份
+function reconcileMeta(serverMeta, username) {
+  const cached = readMetaCache(username);
+  const mine = serverMeta || {};
+  if (!cached || !(cached.savedAt > (mine.savedAt || 0))) return mine;
+  if (confirm('本机有一份更新的存档（上次没能同步到云端），要用它覆盖云端吗？')) return cached;
+  return mine;
+}
+
+let syncHintOn = false;
+
+function setSyncHint(on) {
+  if (on === syncHintOn) return;
+  syncHintOn = on;
+  const el = document.getElementById('sync-hint');
+  if (!el) return;
+  el.classList.toggle('hidden', !on);
+  if (on) el.textContent = '存档暂未同步到云端，已存在本机，联网后自动重试';
+}
+
+// 同步存档到后端；失败按 0.8s / 1.6s 退避重试两次，仍失败就提示（本机镜像已存好）
+function pushMeta(username, nextMeta, attempt) {
+  patchMeta(username, nextMeta)
+    .then(() => setSyncHint(false))
+    .catch(err => {
+      if (err && err.status === 401) { sessionExpired(); return; }
+      if (attempt < 2) { setTimeout(() => pushMeta(username, nextMeta, attempt + 1), 800 * (attempt + 1)); return; }
+      setSyncHint(true);
+    });
+}
+
+// HTTP 通道：注册。明文口令只在 HTTPS 上传输一次，哈希由服务端负责；
+// 重名由数据库主键原子判重（两处并发注册不会互相覆盖），返回 { conflict: true }。
+function registerAccount(user) {
   return fetch('/api/users', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       user: { username: user.username, password: user.password, meta: user.meta },
-      createOnly: !!createOnly,
+      createOnly: true,
     }),
   }).then(r => {
-    if (r.ok) return true;
-    if (r.status === 409) return false;
-    return r.json().catch(() => ({}))
-      .then(d => Promise.reject(new Error(d.error || `HTTP ${r.status}`)));
+    if (r.ok) return r.json().catch(() => ({}));
+    if (r.status === 409) return { conflict: true };
+    return apiFail(r).then(e => Promise.reject(e));
   });
 }
 
-// HTTP 通道：只提交存档，不带密码
+// HTTP 通道：只提交存档（需令牌），不带密码
 function patchMeta(username, nextMeta) {
+  const headers = { 'Content-Type': 'application/json' };
+  const t = token();
+  if (t) headers.Authorization = `Bearer ${t}`;
   return fetch('/api/users', {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ username, meta: nextMeta }),
-  }).then(r => {
-    if (r.ok) return true;
-    return r.json().catch(() => ({}))
-      .then(d => Promise.reject(new Error(d.error || `HTTP ${r.status}`)));
-  });
+  }).then(r => (r.ok ? true : apiFail(r).then(e => Promise.reject(e))));
 }
 
-// 写入账号：HTTP 通道交给服务端哈希，本地通道在这里哈希后再落盘
-function persistAccount(user, createOnly) {
-  if (usesHttpStore()) return pushAccount(user, createOnly);
-  if (createOnly) {
-    return hashPassword(user.password).then(h => { user.password = h; saveUsers(); return true; });
-  }
-  saveUsers();
-  return Promise.resolve(true);
-}
-
+// 存档：先写本机镜像（不依赖网络，必然成功），再同步到后端
 function saveMeta() {
   if (!currentUser) return;
   const u = users.find(x => x.username === currentUser);
   if (u) u.meta = meta;
-  if (usesHttpStore()) patchMeta(currentUser, meta).catch(() => {});
+  meta.savedAt = Date.now();
+  try { localStorage.setItem(metaCacheKey(), JSON.stringify(meta)); } catch (e) {}
+  if (usesHttpStore()) pushMeta(currentUser, meta, 0);
   else saveUsers();
 }
 
@@ -1180,13 +1250,27 @@ async function register(username, password) {
   username = (username || '').trim();
   if (!username || !password) { loginError('请输入用户名和密码'); return false; }
   const u = { username, password, meta: defaultMeta() };
-  try {
-    if (!await persistAccount(u, true)) { loginError('用户名已存在'); return false; }
-  } catch (e) {
-    loginError(`注册失败：${(e && e.message) || e}`);
-    return false;
+
+  // 在线通道：服务端负责哈希并下发令牌
+  if (usesHttpStore()) {
+    let res;
+    try {
+      res = await registerAccount(u);
+    } catch (e) {
+      loginError(`注册失败：${(e && e.message) || e}`);
+      return false;
+    }
+    if (res.conflict) { loginError('用户名已存在'); return false; }
+    setToken(res.token || '');
+    users.push({ username, password: '', meta: u.meta });
+    enterGame(username, u.meta);
+    return true;
   }
-  users.push({ username, password: usesHttpStore() ? '' : u.password, meta: u.meta });
+
+  // 本地通道（Electron / localStorage）：口令先哈希再落盘
+  u.password = await hashPassword(password);
+  users.push(u);
+  saveUsers();
   enterGame(username, u.meta);
   return true;
 }
@@ -1211,6 +1295,7 @@ async function login(username, password) {
     if (!r.ok) { loginError('用户名或密码错误'); return false; }
     const d = await r.json().catch(() => null);
     if (!d || !d.user) { loginError('登录失败：返回数据异常'); return false; }
+    setToken(d.token || '');
     enterGame(d.user.username, d.user.meta);
     return true;
   }
@@ -1220,6 +1305,7 @@ async function login(username, password) {
   const verdict = u ? await checkPassword(password, u.password) : 'bad';
   if (verdict === 'bad') { loginError('用户名或密码错误'); return false; }
   if (verdict === 'legacy') { u.password = await hashPassword(password); saveUsers(); }
+  setToken('');
   enterGame(u.username, u.meta);
   return true;
 }
@@ -1228,7 +1314,8 @@ async function login(username, password) {
 function enterGame(username, rawMeta) {
   currentUser = username;
   localStorage.setItem('fury_current_user', username);
-  meta = normalizeMeta(rawMeta);
+  // 在线通道：若本机镜像比云端新（上次同步失败），先问用户要不要用本机的
+  meta = normalizeMeta(usesHttpStore() ? reconcileMeta(rawMeta, username) : (rawMeta || {}));
   renderMenu();
   showMenu();
 }
@@ -1236,6 +1323,7 @@ function enterGame(username, rawMeta) {
 function logout() {
   currentUser = null;
   meta = defaultMeta();
+  setToken('');
   localStorage.removeItem('fury_current_user');
   showLogin();
 }
@@ -5719,6 +5807,7 @@ function gameOver() {
   stopMusic();
   meta.coins += runCoins;
   if (wave > meta.bestWave) meta.bestWave = wave;
+  submitScore(wave, gameTime);   // 上报本局成绩（只增不减与合理性校验由服务端保证）
   meta.run = null;               // 本局结束，不再保留进度
   // 宠物熟练度结算：局内造成的伤害折算成养成经验
   let petText = '';
@@ -5886,7 +5975,7 @@ function renderMenu() {
   renderPetDev();
   renderBag();
   document.getElementById('opt-sound').checked = !!meta.settings.sound;
-  renderTestMode();
+  renderDevMode();
 }
 
 // ==================== 排行榜（最久波次） ====================
@@ -5954,13 +6043,17 @@ function fetchBoard() {
     .catch(() => { boardStatus('排行榜暂时不可用'); return false; });
 }
 
-// 提交本局成绩。只增不减由服务端（submit_score）保证，这里不需要先比较。
-function submitScore(wave) {
+// 提交本局成绩。身份由令牌决定（服务端不信任请求体里的用户名），
+// 只增不减与合理性校验（波次 vs 对局时长）都在服务端完成，这里不需要先比较。
+function submitScore(wave, duration) {
   if (!currentUser || !usesHttpStore() || !(wave > 0)) return Promise.resolve();
+  const headers = { 'Content-Type': 'application/json' };
+  const t = token();
+  if (t) headers.Authorization = `Bearer ${t}`;
   return fetch('/api/leaderboard', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: currentUser, bestWave: wave }),
+    headers,
+    body: JSON.stringify({ bestWave: wave, duration: Math.max(0, Math.floor(duration || 0)) }),
   }).catch(() => {});
 }
 
@@ -6126,12 +6219,18 @@ document.getElementById('btn-change').onclick = () => {
   renderMenu();
   showMenu();
 };
-// ==================== 隐藏测试模式 ====================
-// 在「设置 → 音效」上连续切换 SOUND_TAP_UNLOCK 次解锁；解锁状态存进账号，换设备也保留。
-function testModeOn() { return !!meta.testMode; }
+// ==================== 开发者模式 ====================
+// 入口：设置页「音效」连续切换 SOUND_TAP_UNLOCK 次 → 弹出密码验证 → 通过后解锁。
+// 解锁状态写进账号（meta.devMode），换设备也保留；改动即时保存，仅对当前账号生效。
+function devModeOn() { return !!meta.devMode; }
 
-function testStatus(msg) {
-  const el = document.getElementById('test-status');
+function devStatus(msg) {
+  const el = document.getElementById('dev-status');
+  if (el) el.textContent = msg;
+}
+
+function devGateStatus(msg) {
+  const el = document.getElementById('dev-gate-status');
   if (el) el.textContent = msg;
 }
 
@@ -6141,79 +6240,129 @@ function clampInt(v, min, max) {
   return Math.min(max, Math.max(min, n));
 }
 
-function fillPetTestFields() {
-  const id = document.getElementById('test-pet').value || Object.keys(PET_DEFS)[0];
-  const d = petDev(id);
-  document.getElementById('test-pet-lv').value = d.lv;
-  document.getElementById('test-pet-star').value = d.star;
-  document.getElementById('test-pet-shards').value = d.shards;
+async function sha256Hex(text) {
+  const bits = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(bits)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function renderTestMode() {
-  const box = document.getElementById('test-mode');
+function setDevGate(show) {
+  const gate = document.getElementById('dev-gate');
+  if (!gate) return;
+  gate.classList.toggle('hidden', !show);
+  devGateStatus('');
+  if (show) {
+    document.getElementById('dev-pass').value = '';
+    document.getElementById('dev-pass').focus();
+  }
+}
+
+function fillPetDevFields() {
+  const id = document.getElementById('dev-pet').value || Object.keys(PET_DEFS)[0];
+  const d = petDev(id);
+  document.getElementById('dev-pet-lv').value = d.lv;
+  document.getElementById('dev-pet-star').value = d.star;
+  document.getElementById('dev-pet-shards').value = d.shards;
+}
+
+function devInfo() {
+  const el = document.getElementById('dev-info');
+  if (!el) return;
+  const size = new Blob([JSON.stringify(meta)]).size;
+  const channel = usesHttpStore() ? '在线接口' : (window.furyStore ? 'Electron 本地文件' : '浏览器本地存储');
+  el.textContent = `${playerName()} · ${channel} · 存档 ${(size / 1024).toFixed(1)} KB${meta.run ? ' · 有未结束对局' : ''}`;
+}
+
+function renderDevMode() {
+  const box = document.getElementById('dev-mode');
   if (!box) return;
-  if (!testModeOn()) {
+  if (!devModeOn()) {
     box.classList.add('hidden');
-    testPanelShown = false;
+    setDevGate(false);
+    devPanelShown = false;
     return;
   }
   box.classList.remove('hidden');
-  if (testPanelShown) return;   // 已填充过就不覆盖，避免打断正在输入的值
-  testPanelShown = true;
-  document.getElementById('test-coins').value = meta.coins;
-  document.getElementById('test-bestwave').value = meta.bestWave;
-  document.getElementById('test-pet').innerHTML =
+  setDevGate(false);
+  if (devPanelShown) return;   // 已填充过就不覆盖，避免打断正在输入的值
+  devPanelShown = true;
+  document.getElementById('dev-coins').value = meta.coins;
+  document.getElementById('dev-bestwave').value = meta.bestWave;
+  document.getElementById('dev-pet').innerHTML =
     Object.keys(PET_DEFS).map(id => `<option value="${id}">${PET_DEFS[id].name}</option>`).join('');
-  fillPetTestFields();
+  fillPetDevFields();
+  devInfo();
 }
 
 document.getElementById('opt-sound').addEventListener('change', e => {
   meta.settings.sound = e.target.checked;
   saveMeta();
-  if (meta.testMode) return;
+  if (devModeOn()) return;
   soundTapCount++;
   if (soundTapCount >= SOUND_TAP_UNLOCK) {
     soundTapCount = 0;
-    meta.testMode = true;
-    saveMeta();
-    renderTestMode();
-    alert('测试模式已解锁');
+    setDevGate(true);   // 不直接解锁：先要密码
   }
 });
 
-document.getElementById('test-pet').onchange = fillPetTestFields;
+async function tryEnterDevMode() {
+  const pass = document.getElementById('dev-pass').value;
+  if (!pass) { devGateStatus('请输入密码'); return; }
+  if (await sha256Hex(pass) !== DEV_PASSWORD_HASH) {
+    document.getElementById('dev-pass').value = '';
+    devGateStatus('密码不正确');
+    return;
+  }
+  meta.devMode = true;
+  saveMeta();
+  renderDevMode();
+  devStatus('已进入开发者模式');
+}
+document.getElementById('dev-enter').onclick = tryEnterDevMode;
+document.getElementById('dev-cancel').onclick = () => { setDevGate(false); soundTapCount = 0; };
+document.getElementById('dev-pass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') tryEnterDevMode();
+});
 
-document.getElementById('test-apply-basic').onclick = () => {
-  const coins = clampInt(document.getElementById('test-coins').value, 0, 9999999);
-  const wave = clampInt(document.getElementById('test-bestwave').value, 0, 9999);
+document.getElementById('dev-exit').onclick = () => {
+  meta.devMode = false;
+  saveMeta();
+  renderDevMode();          // 隐藏面板
+  soundTapCount = 0;
+};
+
+document.getElementById('dev-pet').onchange = fillPetDevFields;
+
+document.getElementById('dev-apply-basic').onclick = () => {
+  const coins = clampInt(document.getElementById('dev-coins').value, 0, 9999999);
+  const wave = clampInt(document.getElementById('dev-bestwave').value, 0, 9999);
   meta.coins = coins;
   meta.bestWave = wave;
   saveMeta();
-  submitScore(meta.bestWave);    // 测试模式改动同样计入排行榜
+  submitScore(meta.bestWave, meta.bestWave * 2 + 60);    // 开发者模式改动同样计入排行榜（声明足够的对局时长以通过合理性校验）
   renderMenu();
-  testStatus(`已应用：金币 ${coins} · 最佳波次 ${wave}`);
+  devStatus(`已应用：金币 ${coins} · 最佳波次 ${wave}`);
 };
 
-document.getElementById('test-unlock-all').onclick = () => {
+document.getElementById('dev-unlock-all').onclick = () => {
   Object.keys(SHOP).forEach(cat => { meta.unlocked[cat] = Object.keys(SHOP[cat]); });
   saveMeta();
   renderMenu();
-  testStatus('已解锁全部武器 / 护甲 / 物品 / 宠物');
+  devStatus('已解锁全部武器 / 护甲 / 物品 / 宠物');
 };
 
-document.getElementById('test-apply-pet').onclick = () => {
-  const id = document.getElementById('test-pet').value;
+document.getElementById('dev-apply-pet').onclick = () => {
+  const id = document.getElementById('dev-pet').value;
   const d = petDev(id);
-  d.lv = clampInt(document.getElementById('test-pet-lv').value, 1, PET_DEV_CFG.lvMax);
-  d.star = clampInt(document.getElementById('test-pet-star').value, 1, PET_DEV_CFG.starMax);
-  d.shards = clampInt(document.getElementById('test-pet-shards').value, 0, 999);
+  d.lv = clampInt(document.getElementById('dev-pet-lv').value, 1, PET_DEV_CFG.lvMax);
+  d.star = clampInt(document.getElementById('dev-pet-star').value, 1, PET_DEV_CFG.starMax);
+  d.shards = clampInt(document.getElementById('dev-pet-shards').value, 0, 999);
   d.exp = 0;
   saveMeta();
   renderMenu();
-  testStatus(`${PET_DEFS[id].name}：Lv.${d.lv} · ★${d.star} · 碎片 ${d.shards}`);
+  devStatus(`${PET_DEFS[id].name}：Lv.${d.lv} · ★${d.star} · 碎片 ${d.shards}`);
 };
 
-document.getElementById('test-max-pet').onclick = () => {
+document.getElementById('dev-max-pet').onclick = () => {
   Object.keys(PET_DEFS).forEach(id => {
     const d = petDev(id);
     d.lv = PET_DEV_CFG.lvMax;
@@ -6223,7 +6372,36 @@ document.getElementById('test-max-pet').onclick = () => {
   });
   saveMeta();
   renderMenu();
-  testStatus(`所有宠物已拉满（Lv.${PET_DEV_CFG.lvMax} · ★${PET_DEV_CFG.starMax}）`);
+  devStatus(`所有宠物已拉满（Lv.${PET_DEV_CFG.lvMax} · ★${PET_DEV_CFG.starMax}）`);
+};
+
+document.getElementById('dev-clear-run').onclick = () => {
+  meta.run = null;
+  saveMeta();
+  renderMenu();
+  devInfo();
+  devStatus('已清空未结束对局，主按钮回到「开始游戏」');
+};
+
+document.getElementById('dev-export').onclick = () => {
+  const box = document.getElementById('dev-json');
+  box.value = JSON.stringify(meta, null, 2);
+  devStatus(`已导出存档（${(new Blob([box.value]).size / 1024).toFixed(1)} KB），可复制备份`);
+};
+
+document.getElementById('dev-import').onclick = () => {
+  const raw = document.getElementById('dev-json').value.trim();
+  if (!raw) { devStatus('请先把存档 JSON 粘贴到上面的输入框'); return; }
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch (e) { devStatus('JSON 解析失败：' + e.message); return; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { devStatus('存档必须是一个 JSON 对象'); return; }
+  meta = normalizeMeta(parsed);
+  meta.devMode = true;      // 导入的存档若不带该字段，保持开发者模式可用
+  saveMeta();
+  renderMenu();
+  devPanelShown = false;
+  renderDevMode();
+  devStatus('存档已导入并保存');
 };
 
 document.getElementById('btn-reset').onclick = () => {
@@ -6257,13 +6435,17 @@ loadUsers().then(() => {
   const savedUser = localStorage.getItem('fury_current_user');
   if (!savedUser) { showLogin(); return; }
 
-  // 在线通道：向服务端确认账号仍在，并取回最新存档（接口不返回密码）
+  // 在线通道：凭令牌取回自己的存档（令牌失效则要求重新登录）
   if (usesHttpStore()) {
-    return fetch(`/api/users?username=${encodeURIComponent(savedUser)}`)
+    const t = token();
+    if (!t) { localStorage.removeItem('fury_current_user'); showLogin(); return; }
+    return fetch(`/api/users?username=${encodeURIComponent(savedUser)}`, {
+      headers: { Authorization: `Bearer ${t}` },
+    })
       .then(r => (r.ok ? r.json() : null))
       .then(d => {
         if (d && d.user) enterGame(d.user.username, d.user.meta);
-        else { localStorage.removeItem('fury_current_user'); showLogin(); }
+        else { setToken(''); localStorage.removeItem('fury_current_user'); showLogin(); }
       })
       .catch(() => showLogin());
   }

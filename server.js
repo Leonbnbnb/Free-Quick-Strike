@@ -3,6 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { issueToken, verifyToken, passwordVersion, bearer } = require('./api/_auth');
 
 const ROOT = __dirname;
 const PORT = process.env.PORT || 8080;
@@ -76,24 +77,37 @@ function readBody(req) {
 }
 
 // 用户数据接口：按账号粒度读写（契约与线上 api/users.js 完全一致）
-//   GET    /api/users?username=<name>                    单个账号，不存在 404；只返回 username / meta
-//   POST   /api/users  { action:'login', username, password }  校验密码
-//   POST   /api/users  { user, createOnly }              注册 / 改密，服务端负责哈希
-//   PATCH  /api/users  { username, meta }                只更新存档，不需要密码
-//   DELETE /api/users?username=<name>                    删除单个账号
+//   GET    /api/users?username=<name>                    单个账号（需令牌）；只返回 username / meta
+//   POST   /api/users  { action:'login', username, password }  校验密码，返回令牌
+//   POST   /api/users  { user, createOnly:true }         注册（无需令牌），返回令牌
+//   POST   /api/users  { user }                          改密（需令牌，只动密码列）
+//   PATCH  /api/users  { username, meta }                只更新存档（需令牌）
+//   DELETE /api/users?username=<name>                    删除账号（需令牌，只能删自己）
 //
+// 除注册与探活外都要求 Authorization: Bearer <token>；令牌含密码版本，改密后旧令牌失效。
 // 密码只存 PBKDF2 哈希，任何接口都不返回密码或哈希；老账号登录成功时原地升级。
 // 不做整表覆盖：多人同时在线时整表写入会互相删掉对方的账号。
 async function handleUsersApi(req, res) {
   const username = (new URL(req.url, 'http://localhost').searchParams.get('username') || '').trim();
   const list = readUsers();
 
+  // 令牌有效且属于目标账号（顺带校验密码版本）
+  const requireAuth = target => {
+    const data = verifyToken(bearer(req));
+    if (!data) { sendJson(res, 401, { ok: false, error: '登录已失效，请重新登录' }); return null; }
+    if (target && data.u !== target) { sendJson(res, 403, { ok: false, error: '不能操作其他账号' }); return null; }
+    const row = list.find(x => x.username === data.u);
+    if (!row) { sendJson(res, 401, { ok: false, error: '账号不存在' }); return null; }
+    if (passwordVersion(row) !== data.pv) { sendJson(res, 401, { ok: false, error: '登录已失效，请重新登录' }); return null; }
+    return row;
+  };
+
   if (req.method === 'GET') {
     // 不带参数只做探活：前端用它判断该走在线接口还是退回本地存储
     if (!username) { sendJson(res, 200, { ok: true, api: 'users' }); return; }
-    const one = list.find(x => x.username === username);
-    if (!one) { sendJson(res, 404, { ok: false, error: '账号不存在' }); return; }
-    sendJson(res, 200, { user: { username: one.username, meta: one.meta || {} } });
+    const row = requireAuth(username);
+    if (!row) return;
+    sendJson(res, 200, { user: { username: row.username, meta: row.meta || {} } });
     return;
   }
 
@@ -116,7 +130,11 @@ async function handleUsersApi(req, res) {
         sendJson(res, 401, { ok: false, error: '用户名或密码错误' });
         return;
       }
-      sendJson(res, 200, { ok: true, user: { username: row.username, meta: row.meta || {} } });
+      sendJson(res, 200, {
+        ok: true,
+        user: { username: row.username, meta: row.meta || {} },
+        token: issueToken(row),
+      });
       return;
     }
 
@@ -125,13 +143,25 @@ async function handleUsersApi(req, res) {
     if (!name) { sendJson(res, 400, { ok: false, error: '缺少 user.username' }); return; }
     const password = String((u && u.password) || '');
     if (!password) { sendJson(res, 400, { ok: false, error: '注册与改密必须提供密码' }); return; }
-    const i = list.findIndex(x => x.username === name);
-    if (i >= 0 && body.createOnly) { sendJson(res, 409, { ok: false, error: '用户名已存在' }); return; }
-    const row = { username: name, password: '', password_hash: hashPassword(password), meta: u.meta || {} };
-    if (i >= 0) list[i] = row;
-    else list.push(row);
+
+    if (body.createOnly) {
+      // 注册：不需要令牌，靠账号名判重保证不会覆盖已有账号
+      const i = list.findIndex(x => x.username === name);
+      if (i >= 0) { sendJson(res, 409, { ok: false, error: '用户名已存在' }); return; }
+      const row = { username: name, password: '', password_hash: hashPassword(password), meta: u.meta || {} };
+      list.push(row);
+      writeUsers(list);
+      sendJson(res, 200, { ok: true, token: issueToken(row) });
+      return;
+    }
+
+    // 改密：必须是本账号已登录，且只动密码两列
+    const row = requireAuth(name);
+    if (!row) return;
+    row.password = '';
+    row.password_hash = hashPassword(password);
     writeUsers(list);
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 200, { ok: true, token: issueToken(row) });
     return;
   }
 
@@ -139,9 +169,9 @@ async function handleUsersApi(req, res) {
     const body = await readBody(req);
     const name = body ? String(body.username || '').trim() : '';
     if (!name) { sendJson(res, 400, { ok: false, error: '缺少 username' }); return; }
-    const i = list.findIndex(x => x.username === name);
-    if (i < 0) { sendJson(res, 404, { ok: false, error: '账号不存在' }); return; }
-    list[i].meta = body.meta || {};
+    const row = requireAuth(name);
+    if (!row) return;
+    row.meta = body.meta || {};
     writeUsers(list);
     sendJson(res, 200, { ok: true });
     return;
@@ -149,6 +179,8 @@ async function handleUsersApi(req, res) {
 
   if (req.method === 'DELETE') {
     if (!username) { sendJson(res, 400, { ok: false, error: '缺少 username' }); return; }
+    const row = requireAuth(username);
+    if (!row) return;
     writeUsers(list.filter(x => x.username !== username));
     sendJson(res, 200, { ok: true });
     return;
@@ -159,10 +191,13 @@ async function handleUsersApi(req, res) {
 
 // 排行榜接口（契约与线上 api/leaderboard.js 一致）
 //   GET  /api/leaderboard?limit=50   取榜单
-//   POST /api/leaderboard            提交成绩 { username, bestWave }，只增不减
+//   POST /api/leaderboard            提交成绩 { bestWave, duration }（需令牌），只增不减
+// 提交者身份取自令牌；并做与线上一致的合理性校验（每 2 秒最多 1 波、时长上限 12 小时、波次上限 5000）。
 // 本地没有 Supabase Realtime，realtime 固定返回 null，前端会自动降级为轮询。
 const SCORES_FILE = path.join(DATA_DIR, 'scores.json');
 const LB_MAX_LIMIT = 100;
+const LB_MAX_WAVE = 5000;
+const LB_MAX_DURATION = 12 * 3600;
 
 function readScores() {
   try {
@@ -192,14 +227,24 @@ async function handleLeaderboardApi(req, res) {
   }
 
   if (req.method === 'POST') {
+    const auth = verifyToken(bearer(req));
+    if (!auth) { sendJson(res, 401, { ok: false, error: '登录已失效，请重新登录' }); return; }
     const body = await readBody(req);
-    const name = body ? String(body.username || '').trim() : '';
-    if (!name) { sendJson(res, 400, { ok: false, error: '缺少 username' }); return; }
+    if (!body) { sendJson(res, 400, { ok: false, error: '请求体不是合法 JSON' }); return; }
     const wave = Math.floor(Number(body.bestWave));
     if (!Number.isFinite(wave) || wave < 0) { sendJson(res, 400, { ok: false, error: 'bestWave 必须是非负整数' }); return; }
+    if (wave > LB_MAX_WAVE) { sendJson(res, 400, { ok: false, error: '波次超出合理范围，已拒绝' }); return; }
+    const duration = Math.floor(Number(body.duration));
+    if (!Number.isFinite(duration) || duration < 0 || duration > LB_MAX_DURATION) {
+      sendJson(res, 400, { ok: false, error: '对局时长无效（需为 0 ~ 43200 秒）' });
+      return;
+    }
+    if (wave > (duration / 2) + 30) { sendJson(res, 400, { ok: false, error: '成绩与对局时长不符，已拒绝' }); return; }
+
+    const name = auth.u;
     const i = list.findIndex(x => x.username === name);
     if (i < 0) {
-      list.push({ username: name, best_wave: Math.max(wave, 0), updated_at: new Date().toISOString() });
+      list.push({ username: name, best_wave: wave, updated_at: new Date().toISOString() });
     } else if (wave > list[i].best_wave) {
       list[i].best_wave = wave;                                  // 只增不减：波次更小就完全不动
       list[i].updated_at = new Date().toISOString();

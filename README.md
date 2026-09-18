@@ -67,9 +67,10 @@ assets/forest.svg          原创暮色森林矢量场景（离线可用）
 tests/visual-smoke.html    浏览器视觉回归测试台（内存存档，不写入账号文件）
 tests/visual-smoke.js      战斗、主题存档、动画与飞剑残影回归检查
 server.js                  开发用静态服务器 + 账号 / 排行榜 API
-api/users.js               线上账号接口（Vercel Serverless，PBKDF2 哈希 + 服务端校验登录）
-api/leaderboard.js         线上排行榜接口（读榜 / 提交成绩，下发 Realtime 连接信息）
-supabase/migrations/       建表脚本：users、scores + Realtime、password_hash
+api/users.js               线上账号接口（Vercel Serverless，PBKDF2 哈希 + 服务端校验 + 会话令牌）
+api/leaderboard.js         线上排行榜接口（需令牌，读榜 / 提交成绩，下发 Realtime 连接信息）
+api/_auth.js               会话令牌的签发与校验（下划线开头不会被暴露成接口）
+supabase/migrations/       建表脚本：users、scores + Realtime、password_hash、submit_score 校验
 electron/main.js           主进程入口
 electron/preload.js        存档读写桥接
 data/users.json            账号存档（运行时生成）
@@ -89,7 +90,9 @@ build/  icon.svg           图标与打包资源
 - 伤害分为子弹 / 元素 / 召唤物 / 宠物四个独立乘区，每个乘区内部是「加算区 × 独立乘区」
 - 存档三通道：Electron 文件读写 → `/api/users` → localStorage，逐级降级；`/api/users` 线上由 Vercel + Supabase 实现，本地由 `server.js` + 文件实现
 - 账号按**账号粒度**写入（不做整表覆盖），密码以 PBKDF2-SHA256 + 随机盐存储、比对在服务端完成，接口不返回密码
-- 排行榜实时更新：原生 WebSocket 直连 Supabase Realtime 订阅 `scores` 变更（未引入 `supabase-js`），连不上自动降级为 8 秒轮询
+- 登录 / 注册下发**会话令牌**（无状态 HMAC 签名串，含密码版本）：存档写入、成绩提交、删号都必须带令牌且只能操作自己的账号
+- 排行榜实时更新：原生 WebSocket 直连 Supabase Realtime 订阅 `scores` 变更（未引入 `supabase-js`），连不上自动降级为 8 秒轮询；提交成绩需令牌，并由服务端按「波次 vs 对局时长」做合理性校验
+- 存档本地兜底：每次存档先写 `localStorage` 镜像，云端同步失败会退避重试并提示，登录时若本机镜像更新会询问是否覆盖云端
 
 界面回归：启动开发服务器后访问 `http://localhost:8080/tests/visual-smoke.html`，点击「运行检查」；可切换手机、小屏和横屏尺寸，以及首页、战斗、六选升级、首领奖励、暂停与结算场景。
 

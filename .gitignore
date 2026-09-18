@@ -4,8 +4,8 @@ dist/
 dist-new/
 游戏本体/
 
-# 运行期数据（账号存档在 data/users.json，勿提交）
-data/users.json
+# 运行期数据（本地存档目录：users.json 账号、scores.json 排行榜，勿提交）
+data/
 
 # Vercel CLI 本地链接目录（含项目 ID，勿提交）
 .vercel

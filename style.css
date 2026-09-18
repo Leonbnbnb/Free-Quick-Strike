@@ -533,6 +533,17 @@ button:disabled {
   margin-top: auto;
 }
 
+/* 存档未同步到云端时的提示（本机镜像已兜底） */
+.sync-hint {
+  margin-top: 8px;
+  padding: 6px 10px;
+  color: #f2cc83;
+  background: #3a2f1a80;
+  border: 1px solid #f2cc8340;
+  border-radius: 10px;
+  text-align: center;
+}
+
 .nav-btn {
   display: flex;
   align-items: center;
@@ -744,26 +755,55 @@ input[type='checkbox'] {
   text-align: left;
 }
 
-/* 测试模式（在音效开关上连续切换 10 次解锁，仅当前账号可见） */
-.test-mode {
+/* 开发者模式（设置页连续切换音效 10 次后输入密码进入，仅当前账号可见） */
+.dev-gate, .dev-mode {
   margin-top: 18px;
   padding: 4px 12px 14px;
   border: 1px dashed var(--line);
   border-radius: 12px;
 }
 
-.test-mode .setting-row:last-of-type {
+.dev-gate .setting-row:last-of-type,
+.dev-mode .setting-row:last-of-type {
   border-bottom: none;
 }
 
-.test-mode input[type='number'] {
+.dev-mode input[type='number'] {
   width: 92px;
   margin-left: auto;
 }
 
-.test-mode select {
+.dev-mode select {
   margin-left: auto;
   min-width: 120px;
+}
+
+.dev-gate input[type='password'] {
+  width: 120px;
+  margin-left: auto;
+}
+
+.dev-gate-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.dev-gate-actions button {
+  flex: 1;
+}
+
+.dev-json {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px;
+  background: #0f2226;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  resize: vertical;
 }
 
 #btn-reset, #btn-logout {
