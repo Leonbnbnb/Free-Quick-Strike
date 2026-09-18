@@ -37,4 +37,4 @@
   - `draw*` 系列：表现层（视觉改动集中在这里）
 - `index.html` / `style.css`：UI 骨架与样式
 - `api/users.js`：线上账号存档接口（Vercel Serverless Function，读写 Supabase `users` 表）；`server.js` 是本地开发用的等价实现，两者 `/api/users` 契约一致
-- `docs/`：需求方案与更新日志
+- `docs/`：需求方案与更新日志（部署相关的改动同步到 [docs/部署流程.md](docs/部署流程.md)）
