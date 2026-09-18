@@ -463,8 +463,8 @@ const BOSS_ORDER = ['charge', 'barrage', 'summoner', 'splitter'];
 // 武器（局外携带，攻击间隔作为 CD）
 const WEAPON_DEFS = {
   rifle:  { name: '步枪', dmg: 15, reload: 0.9, speed: 640, range: 380, color: '#ffe066', baseCount: 1 },
-  shotgun:{ name: '散弹', dmg: 8,  reload: 1.4, speed: 560, range: 300, color: '#9be060', baseCount: 3, spread: 0.5, falloff: { near: 110, far: 250, nearMul: 1.4, farMul: 0.7 } },
-  laser:  { name: '机枪', dmg: 6,  reload: 0.35, speed: 900, range: 420, color: '#ff4d8d', baseCount: 1 },
+  shotgun:{ name: '散弹', dmg: 6,  reload: 1.4, speed: 560, range: 300, color: '#9be060', baseCount: 5, spread: 0.28, converge: 110, offset: 5, falloff: { near: 110, far: 170, nearMul: 1.4, farMul: 0.35 } },
+  laser:  { name: '机枪', dmg: 7,  reload: 0.35, speed: 900, range: 420, color: '#ff4d8d', baseCount: 1 },
   sniper: { name: '狙击枪', dmg: 38, reload: 2.0, speed: 1150, range: 520, color: '#c8b3ff', baseCount: 1, pierce: 1, tracer: true },
 };
 
@@ -487,12 +487,18 @@ const ELEMENT_DEFS = {
 // 召唤物（局内获得，走「召唤物伤害」乘区）
 const SUMMON_DEFS = {
   scythe: {
-    cls: 'summon', name: '镰刀', dmg: 10, orbitSpeed: 3.5, orbitRadius: 70, size: 12, color: '#e8e8e8', baseCount: 1,
+    cls: 'summon', name: '镰刀', dmg: 10, orbitSpeed: 3.5, orbitRadius: 52, size: 12, hitR: 24, hitCd: 0.16, color: '#e8e8e8', baseCount: 1,
     init: { orbitAngle: 0, sizeMul: 1, blockChance: 0.10, knockback: false, lifesteal: 0 },
   },
   sword: {
-    cls: 'summon', name: '飞剑', dmg: 9, hitCd: 0.6, speed: 430, range: 300, color: '#dff3ff', baseCount: 1,
-    init: { pierce: 0, rangeMul: 1, speedMul: 1 },
+    cls: 'summon', name: '飞剑', dmg: 9, hitCd: 0.6, speed: 380, range: 300, color: '#dff3ff', baseCount: 1,
+    orbitRadius: 48, orbitSpeed: 2.0,   // 无敌人时绕角色环绕的半径与角速度
+    exitTime: 0.22,                     // 贯穿敌人后惯性滑行的时长（滑出去一段再冲下一个目标）
+    awayDist: 60,                       // 滑行后若还没拉开这个距离，就再补一点再折返
+    softAvoid: 0.35,                    // 软避让：这段时间内被穿过的敌人，优先让给别的飞剑
+    guardRadius: 80,                    // 护身剑阵：小队这个范围内出现敌人，待机的剑立刻回身斩击
+    hitStop: 0.02,                      // 贯穿命中时的极短顿帧，强化打击感
+    init: { pierce: 0, rangeMul: 1, speedMul: 1, orbitAng: 0, exit: 0, sizeMul: 1, giant: false },
   },
 };
 const POWER_DEFS = Object.assign({}, ELEMENT_DEFS, SUMMON_DEFS);
@@ -619,10 +625,10 @@ const EVOLUTIONS = [
     },
   },
   {
-    id: 'evo-scythe', name: '进化 · 死神镰刀', desc: '镰刀：数量 +2、伤害 +40%、阻挡子弹 45%、造成伤害的 10% 吸血',
+    id: 'evo-scythe', name: '进化 · 死神镰刀', desc: '镰刀：数量 +2、伤害 +40%、吸血 30%、子弹碰到刀刃即被斩落',
     route: 'scythe', need: 3,
-    req: () => { const s = getSummon('scythe'); return !!s && !!s.knockback && (s.sizeMul || 1) > 1; },
-    apply() { const s = getSummon('scythe'); s.extraCount += 2; summonMore('scythe', 1.4); s.blockChance = 0.45; s.lifesteal = 0.10; },
+    req: () => { const s = getSummon('scythe'); return !!s && (s.lifesteal || 0) >= 0.10 && (s.blockChance || 0.10) > 0.10; },
+    apply() { const s = getSummon('scythe'); s.extraCount += 2; summonMore('scythe', 1.4); s.blockChance = 1; s.lifesteal = 0.30; },
   },
   {
     id: 'evo-sword', name: '进化 · 万剑归宗', desc: '飞剑：数量 +2、连斩 +2、伤害 +40%',
@@ -698,6 +704,9 @@ let decorations = [];
 let lightningBolts = [];
 let iceSpikes = [];  // 冰刺命中特效（碎冰炸裂）
 let blasts = [];     // 火球爆炸特效
+let swordSlashes = [];  // 飞剑贯穿斩痕
+let hitStop = 0;     // 顿帧剩余时间（贯穿命中时短暂冻结逻辑，渲染照常）
+let lastHitStopT = -1;
 let obstacles = [];  // 木桶 / 箱子 / 石柱 / 树木
 let vines = [];      // 藤蔓陷阱
 let squadRootedT = 0; // 被藤蔓缠住的剩余时间
@@ -1278,7 +1287,10 @@ function buildUpgradePool() {
     pool.push({ id: 'scythe-more', name: '镰刀数量 +1', desc: '多一把环绕的镰刀（额外刀刃只扩大覆盖面，不降低伤害）', weight: W_NORM, route: 'scythe', apply() { getSummon('scythe').extraCount += 1; } });
     pool.push({ id: 'scythe-speed', name: '镰刀飞行速度 +20%', desc: '镰刀转得更快', weight: W_NORM, route: 'scythe', apply() { summonRate('scythe', 1.2); } });
     pool.push({ id: 'scythe-dmg', name: '镰刀伤害 +30%', desc: '镰刀伤害提升（同类相加）', weight: W_NORM, route: 'scythe', apply() { summonMul('scythe', 1.3); } });
-    pool.push({ id: 'scythe-size', name: '镰刀变大', desc: '镰刀体型增大', weight: W_NORM, route: 'scythe', apply() { getSummon('scythe').sizeMul = (getSummon('scythe').sizeMul || 1) * 1.3; } });
+    pool.push({ id: 'scythe-size', name: '镰刀变大', desc: '刀刃体积与判定 +30%（环半径不变，更容易扫到贴身敌人）', weight: W_NORM, route: 'scythe', apply() { getSummon('scythe').sizeMul = (getSummon('scythe').sizeMul || 1) * 1.3; } });
+    if ((sc.lifesteal || 0) < 0.20) {
+      pool.push({ id: 'scythe-leech', name: '镰刀：饮血 +10%', desc: '镰刀造成伤害的 10% 回复队伍生命（最多叠 2 次）', weight: W_NORM, route: 'scythe', apply() { const s = getSummon('scythe'); s.lifesteal = Math.min(0.20, (s.lifesteal || 0) + 0.10); } });
+    }
     // 阻挡子弹为递进升级：先 +15%，之后才出现 +20%（最高 45%）
     if ((sc.blockChance || 0.10) < 0.25) {
       pool.push({ id: 'scythe-block1', name: '镰刀阻挡子弹 +15%', desc: '概率挡掉敌方子弹', weight: W_NORM, route: 'scythe', apply() { const s = getSummon('scythe'); s.blockChance = Math.min(0.45, (s.blockChance || 0.10) + 0.15); } });
@@ -1288,9 +1300,9 @@ function buildUpgradePool() {
     pool.push({ id: 'scythe-knockback', name: '镰刀：击退', desc: '命中击退敌人', weight: W_NORM, route: 'scythe', apply() { getSummon('scythe').knockback = true; } });
   }
 
-  // 飞剑：常驻实体，在视野内的敌人之间穿梭斩击，无敌人时悬浮身侧
+  // 飞剑：常驻实体，在视野内的敌人之间穿梭斩击，无敌人时剑尖朝下绕角色环绕
   if (!hasSummon('sword')) {
-    pool.push({ id: 'unlock-sword', name: '召唤：飞剑', desc: '召唤一柄飞剑在敌人之间穿梭斩击；视野内没有敌人时悬浮在身旁', weight: 1.2, route: 'sword', apply() { addSummon('sword'); } });
+    pool.push({ id: 'unlock-sword', name: '召唤：飞剑', desc: '召唤一柄飞剑在敌人之间穿梭贯穿；视野内没有敌人时剑尖朝下绕你环绕', weight: 1.2, route: 'sword', apply() { addSummon('sword'); } });
   } else {
     const sw = getSummon('sword');
     pool.push({ id: 'sword-dmg', name: '飞剑伤害 +30%', desc: '飞剑伤害提升（同类相加）', weight: W_NORM, route: 'sword', apply() { summonMul('sword', 1.3); } });
@@ -1300,6 +1312,9 @@ function buildUpgradePool() {
     pool.push({ id: 'sword-speed', name: '飞剑：飞行速度 +20%', desc: '飞剑穿梭得更快', weight: W_NORM, route: 'sword', apply() { const s = getSummon('sword'); s.speedMul = (s.speedMul || 1) * 1.2; } });
     if ((sw.pierce || 0) < 2) {
       pool.push({ id: 'sword-pierce', name: '飞剑：连斩 +1', desc: '斩击时额外波及命中点附近的敌人（最多 2）', weight: W_NORM, route: 'sword', apply() { const s = getSummon('sword'); s.pierce = Math.min(2, (s.pierce || 0) + 1); } });
+    }
+    if (!sw.giant) {                         // 巨剑术：整条线只能拿一次
+      pool.push({ id: 'sword-giant', name: '巨剑术', desc: '飞剑体型 +50%、伤害 +30%；剑身变长变宽，碰到它的敌人都会受伤（仅此一张）', weight: 0.8, route: 'sword', apply() { const s = getSummon('sword'); s.giant = true; s.sizeMul = 1.5; summonMul('sword', 1.3); } });
     }
   }
 
@@ -1580,6 +1595,8 @@ function restoreRun(s) {
     lightningBolts = [];
     iceSpikes = [];
     blasts = [];
+    swordSlashes = [];
+    hitStop = 0;
     banner = { text: '', t: 0 };
 
     // 修正 JSON 存不下 / 会丢类型的字段
@@ -1634,6 +1651,8 @@ function reset() {
   lightningBolts = [];
   iceSpikes = [];
   blasts = [];
+  swordSlashes = [];
+  hitStop = 0;
   obstacles = [];
   vines = [];
   squadRootedT = 0;
@@ -1895,13 +1914,22 @@ function fireWeapon(w, x, y, target) {
   const speed = def.speed * (w.speedMul || 1);
   const spread = (def.spread || 0) * (w.spreadMul === undefined ? 1 : w.spreadMul);
   sfxShoot();
+  const baseAng = Math.atan2(target.y - y, target.x - x);
+  const volley = spread ? baseAng + (Math.random() - 0.5) * spread : baseAng;   // 整轮共用一次散布
+  const offStep = def.offset || 8;
+  const conv = def.converge || 0;
   for (let i = 0; i < cnt; i++) {
-    let ang = Math.atan2(target.y - y, target.x - x);
-    if (spread) ang += (Math.random() - 0.5) * spread;
-    // 多发弹道：沿垂直方向错开枪口位置，多条弹道可见但不会因扩散打空
-    const off = (i - (cnt - 1) / 2) * 8;
-    const bx = x + Math.cos(ang + Math.PI / 2) * off;
-    const by = y + Math.sin(ang + Math.PI / 2) * off;
+    // 多发弹道：沿垂直方向错开枪口位置；有 converge 的武器（散弹）在 converge 距离处收束，
+    // 于是「弹丸越多 = 总伤害越高」在近距成立，超出收束距离才散开
+    const off = (i - (cnt - 1) / 2) * offStep;
+    const bx = x + Math.cos(volley + Math.PI / 2) * off;
+    const by = y + Math.sin(volley + Math.PI / 2) * off;
+    let ang = volley;
+    if (conv > 0) {
+      const tx = x + Math.cos(volley) * conv, ty = y + Math.sin(volley) * conv;
+      ang = Math.atan2(ty - by, tx - bx);
+    }
+    if (spread) ang += (Math.random() - 0.5) * spread * (conv > 0 ? 0.3 : 1);   // 收束弹丸只留少量抖动
     const b = { x: bx, y: by, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, dmg, r: def.tracer ? 4 : 3, aoe: 0, burnDps: 0, burnTime: 0, color: def.color, pierce, split, splitCount, hit: null, tracer: !!def.tracer };
     if (def.falloff) {                 // 距离衰减：命中时按飞行距离结算（贴脸增伤、远距减伤）
       b.sx = bx; b.sy = by;
@@ -1953,17 +1981,17 @@ function updateScythe(s) {
   const def = SUMMON_DEFS.scythe;
   const cnt = def.baseCount + s.extraCount;
   const dmg = def.dmg * s.dmgMul * powerBaseDamage(s);
-  const size = def.size * (s.sizeMul || 1);
-  const rad = def.orbitRadius * (s.sizeMul || 1);
+  const rad = def.orbitRadius;                    // 环半径固定：变大只放大刀刃，不会把刀推远
+  const hitR = def.hitR * (s.sizeMul || 1);       // 判定半径（含刀刃容差），贴身敌人也能扫到
   for (let i = 0; i < cnt; i++) {
     const a = (s.orbitAngle || 0) + (Math.PI * 2 / cnt) * i;
     const bx = squad.x + Math.cos(a) * rad;
     const by = squad.y + Math.sin(a) * rad;
     for (const e of enemies) {
-      if (Math.hypot(bx - e.x, by - e.y) < size + e.r) {
-        if (!e.scytheT || gameTime - e.scytheT > 0.25) {
+      if (Math.hypot(bx - e.x, by - e.y) < hitR + e.r) {
+        if (!e.scytheT || gameTime - e.scytheT > def.hitCd) {
           hitEnemy(e, dmg, 0, 0);
-          if (s.lifesteal > 0) leechHeal(dmg * s.lifesteal);       // 进化 · 死神镰刀：10% 吸血
+          if (s.lifesteal > 0) leechHeal(dmg * s.lifesteal);       // 吸血（饮血卡 / 进化 · 死神镰刀）
           if (s.knockback && e.kbT <= 0 && e.type !== 'boss') {   // Boss 免疫击退
             const kx = e.x - bx, ky = e.y - by;
             const kl = Math.hypot(kx, ky) || 1;
@@ -2156,32 +2184,42 @@ function applyFrost(e, mul, time) {
   e.frostMul = Math.min(e.frostMul === undefined ? 1 : e.frostMul, Math.max(0.15, m));
 }
 
-// 飞剑索敌：视野（以小队为中心）内优先选未刚斩过的最近敌人，形成「穿梭」轨迹
+// 飞剑索敌：视野（以小队为中心）内优先选「短时间内没被任何飞剑穿过」的最近敌人
+// 软避让，不做硬性占位 —— 优先级：刚没被穿过的 > 只有自己刚穿过的那个 > 刚被别的剑穿过的
 function pickSwordTarget(bx, by, range, avoid) {
-  let best = null, bd = Infinity, fallback = null, fd = Infinity;
+  let best = null, bd = Infinity;         // 近期没被穿过、也不是自己刚穿过的
+  let fresh = null, fd = Infinity;        // 近期没被穿过，但正是自己刚穿过的那个
+  let alt = null, ad = Infinity;          // 刚被别的飞剑穿过（都刚被打过时才一起上）
   for (const e of enemies) {
     if (e.hp <= 0) continue;
     if (Math.hypot(e.x - squad.x, e.y - squad.y) > range) continue;
     const d = Math.hypot(e.x - bx, e.y - by);
+    if (gameTime - (e.swordT || -1e9) < SUMMON_DEFS.sword.softAvoid) {
+      if (d < ad) { ad = d; alt = e; }
+      continue;
+    }
     if (e === avoid) {
-      if (d < fd) { fd = d; fallback = e; }
+      if (d < fd) { fd = d; fresh = e; }
       continue;
     }
     if (d < bd) { bd = d; best = e; }
   }
-  return best || fallback;      // 视野内只剩刚斩过的敌人时回身再斩
+  return best || fresh || alt;
 }
 
-// 飞剑：召唤一柄持续存在的飞剑，在敌人之间穿梭斩击；视野内无敌人时悬浮在角色身旁
+// 飞剑：召唤一柄持续存在的飞剑，径直贯穿敌人造成伤害；视野内无敌人时剑尖朝下绕角色环绕
 function updateSword(s, dt) {
   const def = SUMMON_DEFS.sword;
   const cnt = def.baseCount + s.extraCount;
   if (!s.blades) s.blades = [];
   while (s.blades.length < cnt) {
     const i = s.blades.length;
+    const a = (Math.PI * 2 / cnt) * i;      // 直接落在环绕轨道上，多柄均匀分布
     s.blades.push({
-      x: squad.x + (i - (cnt - 1) / 2) * 26, y: squad.y - 40,
-      ang: -Math.PI / 2, cool: 0, tgt: null, last: null, bob: Math.random() * Math.PI * 2,
+      x: squad.x + Math.cos(a) * def.orbitRadius, y: squad.y + Math.sin(a) * def.orbitRadius,
+      // 初始冷却按柄序等分错峰，多柄不会同一时刻一起撞上去
+      ang: Math.PI / 2, cool: (i / cnt) * def.hitCd, tgt: null, last: null, bob: a, exit: 0, spd: 0,
+      hot: false, hitSet: [], guardT: 0,
     });
   }
   if (s.blades.length > cnt) s.blades.length = cnt;
@@ -2191,60 +2229,155 @@ function updateSword(s, dt) {
   const range = def.range * (s.rangeMul || 1);
   const hitCd = def.hitCd / (s.rateMul || 1);
   const chain = s.pierce || 0;
+  const bladeR = 10 * (s.sizeMul || 1);         // 剑身判定半径：巨剑术放大体型后，碰到它的单位都会受伤
+  s.orbitAng = (s.orbitAng || 0) + def.orbitSpeed * dt;   // 回收状态的环绕相位
+
+  // 沿途贯穿：把本帧位移线段上扫到的敌人全部结算（同一趟每只只吃一次）；
+  // 冷却没走完时只穿身不结算，但同样会结束这一趟，避免贴着敌人反复穿刺
+  const pierce = (b, x0, y0) => {
+    const dx = b.x - x0, dy = b.y - y0;
+    const L2 = dx * dx + dy * dy || 1;
+    let first = null, ft = 2;
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      let t = ((e.x - x0) * dx + (e.y - y0) * dy) / L2;
+      t = t < 0 ? 0 : (t > 1 ? 1 : t);
+      const nx = x0 + dx * t, ny = y0 + dy * t;
+      if (Math.hypot(e.x - nx, e.y - ny) > bladeR + e.r) continue;
+      if (t < ft) { ft = t; first = e; }
+      if (b.cool > 0 && !b.hot) continue;          // 冷却中：穿过去，不结算
+      if (b.hitSet.indexOf(e) >= 0) continue;      // 同一趟已经吃过伤害
+      b.hitSet.push(e);
+      hitEnemy(e, dmg, 0, 0);
+      e.swordT = gameTime;                         // 软避让标记
+      spawnSwordSlash(e.x, e.y, b.ang);
+    }
+    if (!first || b.hot) return;                   // 已经在贯穿中：继续冲过去
+    // 本趟首次撞上敌人：进入惯性滑行，冷却就绪则同时结算这一趟
+    b.last = first;
+    b.tgt = null;
+    b.exit = def.exitTime;
+    if (b.cool > 0) return;
+    b.hot = true;
+    b.cool = hitCd;
+    sfxHit();
+    shake = Math.min(10, shake + 1.2);
+    if (gameTime - lastHitStopT > 0.25) { lastHitStopT = gameTime; hitStop = Math.max(hitStop, def.hitStop); }
+    if (chain > 0) {                               // 连斩：波及命中点附近的敌人
+      let n = 0;
+      for (const o of enemies) {
+        if (o === first || o.hp <= 0 || b.hitSet.indexOf(o) >= 0) continue;
+        if (Math.hypot(o.x - first.x, o.y - first.y) < 46 + o.r) {
+          b.hitSet.push(o);
+          hitEnemy(o, dmg, 0, 0);
+          if (++n >= chain) break;
+        }
+      }
+    }
+  };
 
   s.blades.forEach((b, i) => {
     if (b.cool > 0) b.cool -= dt;
-    // 目标死亡或跑出视野（留 10% 余量防空转）→ 放弃，重新索敌 / 回身悬浮
+    if (b.exit > 0) b.exit -= dt;
+    if (b.guardT > 0) b.guardT -= dt;
+    // 目标死亡或跑出视野 → 放弃
     if (b.tgt && (b.tgt.hp <= 0 || Math.hypot(b.tgt.x - squad.x, b.tgt.y - squad.y) > range * 1.1)) b.tgt = null;
-    if (!b.tgt) b.tgt = pickSwordTarget(b.x, b.y, range, b.last);
 
-    // 目标点：追敌 / 冷却时绕敌盘旋 / 无敌人时回到悬浮位
+    // 贯穿惯性段：刚穿过敌人，沿剑尖继续滑行一段（不索敌、不转向），
+    // 滑出去后再回头冲下一个目标 —— 惯性大、有「一剑贯穿后余势未消」的观感
+    if (b.exit > 0) {
+      const x0 = b.x, y0 = b.y;
+      const k = b.exit / def.exitTime;            // 1 → 0
+      const sp = speed * (0.72 + 0.28 * k);       // 起始满速，滑行末段才稍微收住
+      b.spd = sp;
+      b.x += Math.cos(b.ang) * sp * dt;
+      b.y += Math.sin(b.ang) * sp * dt;
+      pierce(b, x0, y0);                          // 滑行途中继续贯穿后面的敌人
+      return;
+    }
+
+    // 护身剑阵：有敌人逼近小队时，在外追击的剑立刻回身护主（不打断正在进行的贯穿滑行）
+    if (b.exit <= 0) {
+      let near = null, nd = def.guardRadius;
+      for (const o of enemies) {
+        if (o.hp <= 0) continue;
+        const dd = Math.hypot(o.x - squad.x, o.y - squad.y);
+        if (dd < nd) { nd = dd; near = o; }
+      }
+      if (near && b.tgt !== near) {
+        const curD = b.tgt ? Math.hypot(b.tgt.x - squad.x, b.tgt.y - squad.y) : Infinity;
+        if (curD > nd + 20) {                    // 当前目标比贴身的威胁更远 → 回护
+          b.tgt = near; b.hot = false; b.hitSet.length = 0;
+          if (b.guardT <= 0) b.guardT = 0.3;
+        }
+      }
+    }
+
+    // 脱离段：刚穿过的敌人就是唯一目标时，先背离飞离到 awayDist 外，
+    // 再等到「剩余冷却刚好够冲回去」时折返（用冲到接触范围的距离估算），
+    // 于是到达瞬间冷却必然结束 —— 每次贯穿都能结算伤害，也不会贴着敌人反复穿刺
+    if (!b.tgt && b.last && b.last.hp > 0) {
+      const dl = Math.hypot(b.last.x - b.x, b.last.y - b.y);
+      const reach = Math.max(0, dl - 10 - b.last.r);          // 冲到接触范围还差多远
+      const inSight = Math.hypot(b.x - squad.x, b.y - squad.y) < range;
+      if (inSight && (dl < def.awayDist || b.cool > reach / speed)) {
+        let other = false;
+        for (const o of enemies) {
+          if (o === b.last || o.hp <= 0) continue;
+          if (Math.hypot(o.x - squad.x, o.y - squad.y) > range) continue;
+          if (gameTime - (o.swordT || -1e9) < def.softAvoid) continue;   // 别的剑刚穿过，先让它
+          other = true; break;
+        }
+        if (!other) {
+          const x0 = b.x, y0 = b.y;
+          const awayAng = Math.atan2(b.y - b.last.y, b.x - b.last.x);
+          const fd = Math.atan2(Math.sin(awayAng - b.ang), Math.cos(awayAng - b.ang));
+          b.ang += fd * Math.min(1, dt * 12);
+          b.turn = Math.abs(fd);
+          b.spd = speed;
+          b.x += Math.cos(b.ang) * speed * dt;
+          b.y += Math.sin(b.ang) * speed * dt;
+          pierce(b, x0, y0);
+          return;
+        }
+      }
+    }
+
+    // 开始新一趟冲刺：清空本趟命中名单
+    if (!b.tgt) {
+      b.tgt = pickSwordTarget(b.x, b.y, range, b.last);
+      b.hot = false;
+      b.hitSet.length = 0;
+    }
+
+    // 目标点：直冲敌人身上（穿身而过）/ 无敌人时回到角色身边的环绕轨道
     let tx, ty;
     if (b.tgt) {
-      if (b.cool > 0) {
-        const oa = gameTime * 3.2 + b.bob;
-        tx = b.tgt.x + Math.cos(oa) * 16;
-        ty = b.tgt.y + Math.sin(oa) * 16;
-      } else {
-        tx = b.tgt.x; ty = b.tgt.y;
-      }
+      tx = b.tgt.x; ty = b.tgt.y;
     } else {
-      tx = squad.x + (i - (cnt - 1) / 2) * 26;
-      ty = squad.y - 40 + Math.sin(gameTime * 2.4 + b.bob) * 4;
+      const oa = s.orbitAng + (Math.PI * 2 / cnt) * i;
+      tx = squad.x + Math.cos(oa) * def.orbitRadius;
+      ty = squad.y + Math.sin(oa) * def.orbitRadius;
     }
 
+    const x0 = b.x, y0 = b.y;                     // 位移前坐标，用于线段穿身判定
     const dx = tx - b.x, dy = ty - b.y;
     const d = Math.hypot(dx, dy) || 1;
-    // 剑尖朝向：追敌时顺着惯性转向目标（走出弧线）；悬浮时朝上轻摆
-    const faceWant = b.tgt ? Math.atan2(dy, dx) : (-Math.PI / 2 + Math.sin(gameTime * 1.8 + b.bob) * 0.25);
+    const moveAng = Math.atan2(dy, dx);
+    // 剑尖朝向：出击时顺行进方向（转向带惯性，出手有弧线感）；
+    // 回收到身侧后转为剑尖朝下轻摆
+    const faceWant = (b.tgt || d > def.orbitRadius * 1.2)
+      ? moveAng
+      : (Math.PI / 2 + Math.sin(gameTime * 2.2 + b.bob) * 0.12);
     const faceDiff = Math.atan2(Math.sin(faceWant - b.ang), Math.cos(faceWant - b.ang));
-    b.ang += faceDiff * Math.min(1, dt * (b.tgt ? 11 : 6));
-    // 位移方向：追敌时沿剑尖飞（带惯性弧线）；悬浮时直线归位，避免剑尖朝上却往外飞
-    const moveAng = b.tgt ? b.ang : Math.atan2(dy, dx);
-    const sp = b.tgt ? speed : Math.min(speed * 0.8, d * 9);   // 悬浮时随距离减速，稳稳停住
+    b.ang += faceDiff * Math.min(1, dt * (b.tgt ? 13 : 9));
+    b.turn = Math.abs(faceDiff);
+    // 出击全程保持满速直接贯穿；回收时随距离减速，稳稳贴到环绕轨道上
+    const sp = b.tgt ? speed : Math.min(speed * 0.9, 60 + d * 7);
+    b.spd = sp;
     b.x += Math.cos(moveAng) * sp * dt;
     b.y += Math.sin(moveAng) * sp * dt;
-
-    if (b.tgt) {
-      const e = b.tgt;
-      if (b.cool <= 0 && Math.hypot(e.x - b.x, e.y - b.y) < 10 + e.r) {
-        hitEnemy(e, dmg, 0, 0);
-        sfxHit();
-        b.cool = hitCd;
-        b.last = e;                                // 下次优先换目标 → 穿梭
-        if (chain > 0) {                           // 连斩：波及命中点附近的敌人
-          let n = 0;
-          for (const o of enemies) {
-            if (o === e || o.hp <= 0) continue;
-            if (Math.hypot(o.x - e.x, o.y - e.y) < 46 + o.r) {
-              hitEnemy(o, dmg, 0, 0);
-              if (++n >= chain) break;
-            }
-          }
-        }
-        b.tgt = pickSwordTarget(b.x, b.y, range, b.last);
-      }
-    }
+    pierce(b, x0, y0);
   });
 }
 
@@ -2893,8 +3026,8 @@ function tryBlockEnemyBullet(b) {
     if (chance <= 0) continue;
     const def = SUMMON_DEFS.scythe;
     const cnt = def.baseCount + s.extraCount;
-    const rad = def.orbitRadius * (s.sizeMul || 1);
-    const size = def.size * (s.sizeMul || 1);
+    const rad = def.orbitRadius;                    // 与伤害判定一致：环半径固定，不随体型推远
+    const size = def.size * (s.sizeMul || 1);       // 变大只放大刀刃本身
     for (let i = 0; i < cnt; i++) {
       const a = (s.orbitAngle || 0) + (Math.PI * 2 / cnt) * i;
       const bx = squad.x + Math.cos(a) * rad;
@@ -4057,63 +4190,160 @@ function drawSoldiers() {
   }
 }
 
-// 飞剑剑身：剑气光晕 + 拖尾 + 剑刃 / 护手 / 剑柄
-function drawSwordBlade(b) {
+// 飞剑贯穿斩痕：沿剑身方向的一道细长白光 + 一圈扩散冲击
+function spawnSwordSlash(x, y, ang) {
+  swordSlashes.push({ x, y, ang, t: 0.2, life: 0.2 });
+  if (swordSlashes.length > 60) swordSlashes.shift();
+}
+function updateSwordSlashes(dt) {
+  for (const s of swordSlashes) s.t -= dt;
+  swordSlashes = swordSlashes.filter(s => s.t > 0);
+}
+function drawSwordSlashes() {
+  if (!swordSlashes.length) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const s of swordSlashes) {
+    const k = s.t / s.life;                      // 1 → 0
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(s.ang);
+    const L = 15 + 26 * (1 - k);
+    const g = ctx.createLinearGradient(-L, 0, L, 0);
+    g.addColorStop(0, 'rgba(190,235,255,0)');
+    g.addColorStop(0.5, 'rgba(255,255,255,' + (0.85 * k).toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(190,235,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(-L, 0); ctx.lineTo(0, -2.8 * k); ctx.lineTo(L, 0); ctx.lineTo(0, 2.8 * k);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(200,240,255,' + (0.45 * k).toFixed(3) + ')';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.arc(0, 0, 7 + 20 * (1 - k), 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+// 飞剑剑身：剑气光晕 + 速度拖尾 + 残影 + 剑刃 / 剑脊 / 护手 / 剑柄 / 剑首
+function drawSwordBlade(b, sizeMul) {
+  const sc = sizeMul || 1;
+  const fast = Math.min(1, (b.spd || 0) / 380);          // 0~1：速度归一化，拖尾与残影都跟着它变化
+  const roll = Math.min(0.28, (b.turn || 0) * 0.3);      // 急转侧倾（压窄剑身），像真的在拐弯
+
+  // 剑身轮廓（剑尖朝 +x）
+  const body = () => {
+    ctx.beginPath();
+    ctx.moveTo(17, 0); ctx.lineTo(6, -2.6); ctx.lineTo(-8.5, -2.2);
+    ctx.lineTo(-11, 0); ctx.lineTo(-8.5, 2.2); ctx.lineTo(6, 2.6);
+    ctx.closePath();
+  };
+
   ctx.save();
   ctx.translate(b.x, b.y);
+  if (sc !== 1) ctx.scale(sc, sc);      // 巨剑术：整体放大（剑气、拖尾、剑身一起变大）
 
+  // 护身剑阵激活：剑身外圈闪一下
+  if (b.guardT > 0) {
+    const gk = b.guardT / 0.3;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = 'rgba(150,230,255,' + (0.55 * gk).toFixed(3) + ')';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, 12 + 10 * (1 - gk), 0, Math.PI * 2); ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // 剑气光晕：飞得越快越亮
   ctx.globalCompositeOperation = 'lighter';
-  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, 24);
-  glow.addColorStop(0, 'rgba(190,235,255,0.40)');
+  const gr = 16 + 14 * fast;
+  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, gr);
+  glow.addColorStop(0, 'rgba(190,235,255,' + (0.20 + 0.28 * fast).toFixed(3) + ')');
   glow.addColorStop(1, 'rgba(120,200,255,0)');
   ctx.fillStyle = glow;
-  ctx.beginPath(); ctx.arc(0, 0, 24, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, gr, 0, Math.PI * 2); ctx.fill();
   ctx.globalCompositeOperation = 'source-over';
 
   ctx.rotate(b.ang);
-  // 剑气拖尾
-  const trail = ctx.createLinearGradient(-34, 0, 0, 0);
+
+  // 速度拖尾：长度与亮度随手速变化，慢速回收时几乎看不到
+  const tl = 20 + 48 * fast;
+  const trail = ctx.createLinearGradient(-tl, 0, 2, 0);
   trail.addColorStop(0, 'rgba(150,215,255,0)');
-  trail.addColorStop(1, 'rgba(190,235,255,0.45)');
+  trail.addColorStop(0.6, 'rgba(180,228,255,' + (0.08 + 0.16 * fast).toFixed(3) + ')');
+  trail.addColorStop(1, 'rgba(216,242,255,' + (0.26 + 0.30 * fast).toFixed(3) + ')');
   ctx.fillStyle = trail;
   ctx.beginPath();
-  ctx.moveTo(-2, -3.6); ctx.lineTo(-34, 0); ctx.lineTo(-2, 3.6);
+  ctx.moveTo(2, -3.4); ctx.lineTo(-tl, -0.7); ctx.lineTo(-tl, 0.7); ctx.lineTo(2, 3.4);
   ctx.closePath(); ctx.fill();
-  // 剑身
-  const body = ctx.createLinearGradient(-12, 0, 16, 0);
-  body.addColorStop(0, '#8fc4e8');
-  body.addColorStop(0.45, '#ffffff');
-  body.addColorStop(1, '#eaf8ff');
-  ctx.fillStyle = body;
-  ctx.beginPath();
-  ctx.moveTo(16, 0); ctx.lineTo(2, -3.6); ctx.lineTo(-9, -2.6);
-  ctx.lineTo(-12, 0); ctx.lineTo(-9, 2.6); ctx.lineTo(2, 3.6);
-  ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = 'rgba(90,150,190,0.75)';
+
+  // 残影：高速滑行时身后拖两道淡影，强化「惯性」
+  if (fast > 0.45) {
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = '#bfe8ff';
+    for (let k = 1; k <= 2; k++) {
+      ctx.globalAlpha = (0.16 / k) * fast;
+      ctx.save();
+      ctx.translate(-k * (9 + 16 * fast), 0);
+      ctx.scale(0.95, 1 - roll);
+      body(); ctx.fill();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // 剑身本体
+  ctx.save();
+  ctx.scale(1, 1 - roll);
+  const blade = ctx.createLinearGradient(-11, -3, 10, 3);
+  blade.addColorStop(0, '#9ecbe8');
+  blade.addColorStop(0.42, '#ffffff');
+  blade.addColorStop(1, '#dff3ff');
+  body();
+  ctx.fillStyle = blade;
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(86,146,186,0.8)';
   ctx.lineWidth = 1;
   ctx.stroke();
-  // 护手 + 剑柄
-  ctx.strokeStyle = '#7fb4d8';
+  // 剑脊高光
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.beginPath(); ctx.moveTo(13, 0); ctx.lineTo(-7, 0); ctx.stroke();
+  // 剑尖
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.beginPath(); ctx.arc(14.5, 0, 1.5, 0, Math.PI * 2); ctx.fill();
+  // 护手
+  ctx.strokeStyle = '#74a9cd';
   ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(-9, -5); ctx.lineTo(-9, 5); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(-15, 0); ctx.stroke();
-  // 剑尖高光
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.beginPath(); ctx.arc(13, 0, 1.6, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-9, -5.4); ctx.quadraticCurveTo(-11.6, 0, -9, 5.4); ctx.stroke();
+  // 剑柄与缠绳
+  ctx.strokeStyle = '#4d6f8c';
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(-10.5, 0); ctx.lineTo(-17, 0); ctx.stroke();
+  ctx.strokeStyle = 'rgba(190,225,245,0.7)';
+  ctx.lineWidth = 1;
+  for (let k = 0; k < 2; k++) {
+    const hx = -12 - k * 2.4;
+    ctx.beginPath(); ctx.moveTo(hx, -1.2); ctx.lineTo(hx, 1.2); ctx.stroke();
+  }
+  // 剑首宝石
+  ctx.fillStyle = '#bfe8ff';
+  ctx.beginPath(); ctx.arc(-18, 0, 1.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
   ctx.restore();
 }
 
 function drawSummons() {
   summons.forEach(s => {
     if (s.type === 'sword') {
-      (s.blades || []).forEach(drawSwordBlade);
+      (s.blades || []).forEach(b => drawSwordBlade(b, s.sizeMul || 1));
       return;
     }
     if (s.type !== 'scythe') return;
     const def = SUMMON_DEFS.scythe;
     const cnt = def.baseCount + s.extraCount;
     const size = def.size * (s.sizeMul || 1);
-    const rad = def.orbitRadius * (s.sizeMul || 1);
+    const rad = def.orbitRadius;                    // 与伤害判定一致：环半径固定
     for (let i = 0; i < cnt; i++) {
       const a = (s.orbitAngle || 0) + (Math.PI * 2 / cnt) * i;
       const bx = squad.x + Math.cos(a) * rad;
@@ -4785,6 +5015,7 @@ function render() {
   drawEnemyBullets();
   drawLightningBolts();
   drawBlasts();
+  drawSwordSlashes();
   drawParticles();
   drawDamageNumbers();
   ctx.restore();
@@ -4859,7 +5090,9 @@ function loop(now) {
     dt = Math.min(0.05, raw / 1000);
   }
 
-  update(dt);
+  // 贯穿命中顿帧：极短地冻结逻辑（渲染照常），强化打击感
+  if (hitStop > 0) hitStop = Math.max(0, hitStop - dt);
+  else update(dt);
   render();
 
   // 暂停按钮只在可操作的对局中显示（升级 / Boss 奖励面板打开时隐藏）
