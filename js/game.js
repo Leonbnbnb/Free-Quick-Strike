@@ -792,6 +792,9 @@ const SHOP = {
 let state = 'menu'; // menu | playing | upgrade | bossreward | gameover
 let runCoins = 0;   // 本局获得金币
 let petMsg = '';    // 宠物养成页的最近一次操作反馈（抽蛋/升星）
+let soundTapCount = 0;        // 隐藏测试模式：音效开关的连续切换计数
+let testPanelShown = false;   // 测试面板是否已填充（避免覆盖正在输入的值）
+const SOUND_TAP_UNLOCK = 10;  // 连续切换多少次解锁测试模式
 
 // 局外进度（按用户持久化到 localStorage）
 let users = [];
@@ -920,6 +923,7 @@ function defaultMeta() {
     character: defaultCharacter(),
     settings: { sound: true, orient: 'portrait', fps: 0, effects: 'full', theme: 'forest' },
     bestWave: 0,
+    testMode: false,     // 隐藏测试模式：在音效开关上连续切换 10 次解锁
     run: null,           // 上把未结束的进度快照（返回主菜单时保存）
   };
 }
@@ -5784,11 +5788,13 @@ function renderMenu() {
   renderPetDev();
   renderBag();
   document.getElementById('opt-sound').checked = !!meta.settings.sound;
+  renderTestMode();
 }
 
 // 标签切换
 document.querySelectorAll('.tab').forEach(btn => {
   btn.addEventListener('click', () => {
+    soundTapCount = 0;   // 离开设置页即打断「连续切换」计数
     document.querySelector('#menu .menu-panel').scrollTop = 0;
     document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -5838,10 +5844,105 @@ document.getElementById('btn-change').onclick = () => {
   renderMenu();
   showMenu();
 };
+// ==================== 隐藏测试模式 ====================
+// 在「设置 → 音效」上连续切换 SOUND_TAP_UNLOCK 次解锁；解锁状态存进账号，换设备也保留。
+function testModeOn() { return !!meta.testMode; }
+
+function testStatus(msg) {
+  const el = document.getElementById('test-status');
+  if (el) el.textContent = msg;
+}
+
+function clampInt(v, min, max) {
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n)) return min;
+  return Math.min(max, Math.max(min, n));
+}
+
+function fillPetTestFields() {
+  const id = document.getElementById('test-pet').value || Object.keys(PET_DEFS)[0];
+  const d = petDev(id);
+  document.getElementById('test-pet-lv').value = d.lv;
+  document.getElementById('test-pet-star').value = d.star;
+  document.getElementById('test-pet-shards').value = d.shards;
+}
+
+function renderTestMode() {
+  const box = document.getElementById('test-mode');
+  if (!box) return;
+  if (!testModeOn()) {
+    box.classList.add('hidden');
+    testPanelShown = false;
+    return;
+  }
+  box.classList.remove('hidden');
+  if (testPanelShown) return;   // 已填充过就不覆盖，避免打断正在输入的值
+  testPanelShown = true;
+  document.getElementById('test-coins').value = meta.coins;
+  document.getElementById('test-bestwave').value = meta.bestWave;
+  document.getElementById('test-pet').innerHTML =
+    Object.keys(PET_DEFS).map(id => `<option value="${id}">${PET_DEFS[id].name}</option>`).join('');
+  fillPetTestFields();
+}
+
 document.getElementById('opt-sound').addEventListener('change', e => {
   meta.settings.sound = e.target.checked;
   saveMeta();
+  if (meta.testMode) return;
+  soundTapCount++;
+  if (soundTapCount >= SOUND_TAP_UNLOCK) {
+    soundTapCount = 0;
+    meta.testMode = true;
+    saveMeta();
+    renderTestMode();
+    alert('测试模式已解锁');
+  }
 });
+
+document.getElementById('test-pet').onchange = fillPetTestFields;
+
+document.getElementById('test-apply-basic').onclick = () => {
+  const coins = clampInt(document.getElementById('test-coins').value, 0, 9999999);
+  const wave = clampInt(document.getElementById('test-bestwave').value, 0, 9999);
+  meta.coins = coins;
+  meta.bestWave = wave;
+  saveMeta();
+  renderMenu();
+  testStatus(`已应用：金币 ${coins} · 最佳波次 ${wave}`);
+};
+
+document.getElementById('test-unlock-all').onclick = () => {
+  Object.keys(SHOP).forEach(cat => { meta.unlocked[cat] = Object.keys(SHOP[cat]); });
+  saveMeta();
+  renderMenu();
+  testStatus('已解锁全部武器 / 护甲 / 物品 / 宠物');
+};
+
+document.getElementById('test-apply-pet').onclick = () => {
+  const id = document.getElementById('test-pet').value;
+  const d = petDev(id);
+  d.lv = clampInt(document.getElementById('test-pet-lv').value, 1, PET_DEV_CFG.lvMax);
+  d.star = clampInt(document.getElementById('test-pet-star').value, 1, PET_DEV_CFG.starMax);
+  d.shards = clampInt(document.getElementById('test-pet-shards').value, 0, 999);
+  d.exp = 0;
+  saveMeta();
+  renderMenu();
+  testStatus(`${PET_DEFS[id].name}：Lv.${d.lv} · ★${d.star} · 碎片 ${d.shards}`);
+};
+
+document.getElementById('test-max-pet').onclick = () => {
+  Object.keys(PET_DEFS).forEach(id => {
+    const d = petDev(id);
+    d.lv = PET_DEV_CFG.lvMax;
+    d.star = PET_DEV_CFG.starMax;
+    d.shards = 0;
+    d.exp = 0;
+  });
+  saveMeta();
+  renderMenu();
+  testStatus(`所有宠物已拉满（Lv.${PET_DEV_CFG.lvMax} · ★${PET_DEV_CFG.starMax}）`);
+};
+
 document.getElementById('btn-reset').onclick = () => {
   if (confirm('确定重置当前账号进度？')) {
     meta = defaultMeta();

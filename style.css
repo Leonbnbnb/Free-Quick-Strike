@@ -744,6 +744,28 @@ input[type='checkbox'] {
   text-align: left;
 }
 
+/* 测试模式（在音效开关上连续切换 10 次解锁，仅当前账号可见） */
+.test-mode {
+  margin-top: 18px;
+  padding: 4px 12px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+}
+
+.test-mode .setting-row:last-of-type {
+  border-bottom: none;
+}
+
+.test-mode input[type='number'] {
+  width: 92px;
+  margin-left: auto;
+}
+
+.test-mode select {
+  margin-left: auto;
+  min-width: 120px;
+}
+
 #btn-reset, #btn-logout {
   width: 100%;
 }

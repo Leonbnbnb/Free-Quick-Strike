@@ -187,6 +187,29 @@
             <div id="theme-options" class="theme-options"></div>
             <p id="theme-status" class="dim" role="status"></p>
           </section>
+
+          <!-- 测试模式：在音效开关上连续切换 10 次解锁，仅对当前账号生效 -->
+          <section id="test-mode" class="test-mode hidden" aria-labelledby="test-mode-title">
+            <div class="sec-title" id="test-mode-title">测试模式</div>
+            <p class="dim">仅供调试，改动即时保存到当前账号。</p>
+
+            <label class="setting-row">金币 <input type="number" id="test-coins" min="0" step="100" inputmode="numeric"></label>
+            <label class="setting-row">最佳波次 <input type="number" id="test-bestwave" min="0" step="1" inputmode="numeric"></label>
+            <button id="test-apply-basic" class="ghost">应用金币 / 波次</button>
+
+            <button id="test-unlock-all" class="ghost">一键解锁全部</button>
+
+            <div class="sec-title">宠物养成</div>
+            <label class="setting-row">宠物 <select id="test-pet"></select></label>
+            <label class="setting-row">等级 <input type="number" id="test-pet-lv" min="1" step="1" inputmode="numeric"></label>
+            <label class="setting-row">星级 <input type="number" id="test-pet-star" min="1" step="1" inputmode="numeric"></label>
+            <label class="setting-row">碎片 <input type="number" id="test-pet-shards" min="0" step="1" inputmode="numeric"></label>
+            <button id="test-apply-pet" class="ghost">应用宠物数据</button>
+            <button id="test-max-pet" class="ghost">宠物全部拉满</button>
+
+            <p id="test-status" class="dim" role="status"></p>
+          </section>
+
           <div class="disp-settings"></div>
           <button id="btn-reset" class="ghost">重置进度</button>
           <button id="btn-logout" class="ghost">退出登录</button>
