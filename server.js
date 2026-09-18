@@ -182,6 +182,8 @@ async function handleUsersApi(req, res) {
     const row = requireAuth(username);
     if (!row) return;
     writeUsers(list.filter(x => x.username !== username));
+    // 顺带清掉榜单记录，避免删号后还挂在排行榜上
+    writeScores(readScores().filter(x => x.username !== username));
     sendJson(res, 200, { ok: true });
     return;
   }

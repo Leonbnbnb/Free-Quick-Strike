@@ -126,6 +126,14 @@ async function deleteUser(username) {
   });
 }
 
+// 删号时一并清掉榜单记录，避免留下挂在排行榜上的孤儿行
+async function deleteScore(username) {
+  await sbFetch(`scores?username=eq.${eq(username)}`, {
+    method: 'DELETE',
+    headers: headers({ Prefer: 'return=minimal' }),
+  });
+}
+
 function send(res, code, payload) {
   res.statusCode = code;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -221,6 +229,7 @@ module.exports = async function handler(req, res) {
       const row = await requireAuth(req, res, username);
       if (!row) return;
       await deleteUser(username);
+      await deleteScore(username);   // 顺带清掉榜单记录，避免删号后还挂在排行榜上
       send(res, 200, { ok: true });
       return;
     }
