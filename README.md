@@ -17,6 +17,7 @@
 - **敌人**：普通 / 快速 / 远程 / 精英 / 自爆 / 猎人 / 治疗 / 护盾 / 召唤 等十余种；每 5 波出现带护盾的精英，每 10 波出现 Boss（冲锋者 / 弹幕者 / 召唤者 / 分裂者 轮换）
 - **世界异变**：击败 Boss 后地图会长出树木与藤蔓，靠近过久会被苏醒的树怪袭击
 - **局外养成**：金币解锁武器 / 护甲 / 物品 / 宠物；宠物另有等级（熟练度）、升星（碎片）、随机词条与专属天赋树
+- **排行榜**：主菜单按账号最久波次排名，成绩实时推送（Supabase Realtime，连不上自动降级为轮询），方便与好友竞技
 - **美术与界面**：主菜单设置内可选择原始精简、暮色森林、霓虹街机、暖纸手绘、深海星夜五种主题，随账号保存，仅局外可改，不影响局内花草建筑；精细福瑞角色带摇尾、呼吸、眨眼和抖耳动画，怪物按职能使用专属轮廓与道具，支持横屏双栏、精简环境特效及减少动态效果偏好
 
 ## 运行
@@ -36,21 +37,24 @@ node server.js
 # 浏览器打开 http://localhost:8080
 ```
 
-`server.js` 同时提供 `/api/users` 账号存档接口（落盘到 `data/users.json`）；若只是纯静态托管，存档会自动退回浏览器 localStorage。
+`server.js` 同时提供 `/api/users`（账号存档，落盘 `data/users.json`）与 `/api/leaderboard`（排行榜，落盘 `data/scores.json`）；若只是纯静态托管，存档会自动退回浏览器 localStorage。
 
 ### 线上版（Vercel + Supabase）
 
-前端静态资源托管在 Vercel，账号存档由 Serverless Function `api/users.js` 写入 Supabase。
+前端静态资源托管在 Vercel，账号与排行榜由 Serverless Function 写入 Supabase。
 
-1. 在 Supabase 建项目，执行 [supabase/migrations/0001_users.sql](supabase/migrations/0001_users.sql) 建表（`users` 表 + RLS）。
+1. 在 Supabase 建项目，按顺序执行 `supabase/migrations/` 下的三个脚本（`users` 表、`scores` 表 + Realtime、`password_hash` 列）。
 2. 在 Vercel 项目的 Settings → Environment Variables 配置（**不要**提交到仓库）：
    - `SUPABASE_URL`：Supabase 项目 URL，形如 `https://<project-ref>.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY`：secret / service_role 密钥，仅服务端使用
+   - `SUPABASE_ANON_KEY`：publishable 密钥，用于排行榜的实时订阅（不配则只走轮询）
 3. 部署：仓库连到 Vercel 后 `main` 分支自动构建，或本地执行 `vercel --prod`。
 
-> 存档安全：前端从不直连数据库，`anon` / `authenticated` 角色已被收回权限，只有服务端密钥能读写。
+> 安全：前端从不直连数据库写，`anon` / `authenticated` 在 `users` 上的权限已全部收回（`scores` 仅开放只读，Realtime 订阅所需），只有服务端密钥能读写；密码以 PBKDF2 哈希存储、校验在服务端完成。
 >
 > 环境变量变更后需要重新部署才会生效。
+>
+> 完整步骤、验证清单与故障排查见 [docs/部署流程.md](docs/部署流程.md)。
 
 ## 目录结构
 
@@ -62,10 +66,14 @@ js/game.js                 全部游戏逻辑与渲染（单文件，约 5000 �
 assets/forest.svg          原创暮色森林矢量场景（离线可用）
 tests/visual-smoke.html    浏览器视觉回归测试台（内存存档，不写入账号文件）
 tests/visual-smoke.js      战斗、主题存档、动画与飞剑残影回归检查
-server.js                  开发用静态服务器 + 账号存档 API
+server.js                  开发用静态服务器 + 账号 / 排行榜 API
+api/users.js               线上账号接口（Vercel Serverless，PBKDF2 哈希 + 服务端校验登录）
+api/leaderboard.js         线上排行榜接口（读榜 / 提交成绩，下发 Realtime 连接信息）
+supabase/migrations/       建表脚本：users、scores + Realtime、password_hash
 electron/main.js           主进程入口
 electron/preload.js        存档读写桥接
 data/users.json            账号存档（运行时生成）
+data/scores.json           排行榜存档（本地开发，运行时生成）
 AGENTS.md                  协作约定：改完代码必须同步下面两个文档
 docs/需求方案.md           需求文档：当前实现的权威说明（机制 / 数值 / 卡池 / 进化 / 平衡）
 docs/更新日志.md           更新日志：每次较大改动的简要叙述（加强了什么、削弱了什么）
@@ -80,6 +88,8 @@ build/  icon.svg           图标与打包资源
 - 音效全部由 WebAudio 实时合成（噪声 + 滤波扫频 + 包络），不依赖任何音频素材
 - 伤害分为子弹 / 元素 / 召唤物 / 宠物四个独立乘区，每个乘区内部是「加算区 × 独立乘区」
 - 存档三通道：Electron 文件读写 → `/api/users` → localStorage，逐级降级；`/api/users` 线上由 Vercel + Supabase 实现，本地由 `server.js` + 文件实现
+- 账号按**账号粒度**写入（不做整表覆盖），密码以 PBKDF2-SHA256 + 随机盐存储、比对在服务端完成，接口不返回密码
+- 排行榜实时更新：原生 WebSocket 直连 Supabase Realtime 订阅 `scores` 变更（未引入 `supabase-js`），连不上自动降级为 8 秒轮询
 
 界面回归：启动开发服务器后访问 `http://localhost:8080/tests/visual-smoke.html`，点击「运行检查」；可切换手机、小屏和横屏尺寸，以及首页、战斗、六选升级、首领奖励、暂停与结算场景。
 

@@ -1053,87 +1053,184 @@ function drawPetEgg() {
   renderMenu();
 }
 
-// 用户存档：优先落盘到本地文件（Electron 主进程 / 开发服务器 /api/users），无后端时退回浏览器存储
+// 用户存档：优先走后端（Electron 主进程 / 开发服务器 /api/users），无后端时退回浏览器存储。
+// 后端写入一律按账号粒度提交，不整表覆盖，避免多人同时在线互相删存档。
 const USERS_KEY = 'fury_users';
 let userStoreMode = 'local';   // 'file' | 'local'
 
-function loadUsersFromFile() {
-  if (window.furyStore && window.furyStore.load) return Promise.resolve(window.furyStore.load());
-  if (location.protocol === 'http:' || location.protocol === 'https:') {
-    return fetch('/api/users')
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => (d && Array.isArray(d.users) ? d.users : null))
-      .catch(() => null);
+// 是否走 HTTP 后端（浏览器 + 开发服务器 / Vercel）。Electron 有 IPC 通道，不算在内。
+function usesHttpStore() {
+  return userStoreMode === 'file' && !(window.furyStore && window.furyStore.save);
+}
+
+// 本地通道（Electron / localStorage）自行算哈希，格式与服务端一致：
+// pbkdf2$sha256$<迭代次数>$<盐base64>$<哈希base64>
+const PBKDF2_ITER = 120000;
+const toB64 = bytes => btoa(String.fromCharCode.apply(null, bytes));
+
+function isHashed(v) { return /^pbkdf2\$/.test(String(v || '')); }
+
+async function pbkdf2Bits(password, salt, iterations) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, key, 256);
+  return new Uint8Array(bits);
+}
+
+async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  return `pbkdf2$sha256$${PBKDF2_ITER}$${toB64(salt)}$${toB64(await pbkdf2Bits(password, salt, PBKDF2_ITER))}`;
+}
+
+// 'ok' 哈希匹配 / 'legacy' 老存档的明文口令（调用方负责升级）/ 'bad' 不匹配
+async function checkPassword(password, stored) {
+  if (isHashed(stored)) {
+    const parts = String(stored).split('$');
+    const salt = Uint8Array.from(atob(parts[3]), c => c.charCodeAt(0));
+    const hash = toB64(await pbkdf2Bits(password, salt, Number(parts[2]) || PBKDF2_ITER));
+    return hash === parts[4] ? 'ok' : 'bad';
   }
-  return Promise.resolve(null);
+  return (typeof stored === 'string' && stored.length > 0 && stored === password) ? 'legacy' : 'bad';
+}
+
+// 账号数据来源：Electron 走 IPC，网页探活后端接口，都没有才退回 localStorage。
+// HTTP 通道下 users 只作为当前账号的内存缓存，不再是全表。
+function loadLocalUsers() {
+  userStoreMode = 'local';
+  try {
+    const s = localStorage.getItem(USERS_KEY);
+    users = s ? JSON.parse(s) : [];
+  } catch (e) { users = []; }
 }
 
 function loadUsers() {
-  return loadUsersFromFile().then(list => {
-    if (list) {
+  if (window.furyStore && window.furyStore.load) {
+    return Promise.resolve(window.furyStore.load()).then(list => {
       userStoreMode = 'file';
-      users = list;
-      if (!users.length) {
-        // 首次启用文件存档：把浏览器里的旧账号迁移过来
-        try {
-          const s = localStorage.getItem(USERS_KEY);
-          const old = s ? JSON.parse(s) : null;
-          if (Array.isArray(old) && old.length) { users = old; saveUsers(); }
-        } catch (e) {}
-      }
-      return;
-    }
-    userStoreMode = 'local';
-    try {
-      const s = localStorage.getItem(USERS_KEY);
-      if (s) users = JSON.parse(s);
-    } catch (e) { users = []; }
-  });
+      users = Array.isArray(list) ? list : [];
+    });
+  }
+  if (location.protocol === 'http:' || location.protocol === 'https:') {
+    return fetch('/api/users')
+      .then(r => { if (!r.ok) throw new Error('no api'); userStoreMode = 'file'; users = []; })
+      .catch(() => loadLocalUsers());
+  }
+  loadLocalUsers();
+  return Promise.resolve();
 }
 
+// Electron IPC 与 localStorage 通道：按整表落盘（本地单机无并发问题）
 function saveUsers() {
   if (userStoreMode === 'file') {
     if (window.furyStore && window.furyStore.save) window.furyStore.save(users);
-    else fetch('/api/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ users }),
-    }).catch(() => {});
     return;
   }
   try { localStorage.setItem(USERS_KEY, JSON.stringify(users)); } catch (e) {}
 }
 
+// HTTP 通道：注册 / 改密。明文口令只在 HTTPS 上传输一次，哈希由服务端负责。
+// createOnly=true 交给数据库主键原子判重，账号已存在时返回 false（服务端 409）。
+function pushAccount(user, createOnly) {
+  return fetch('/api/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user: { username: user.username, password: user.password, meta: user.meta },
+      createOnly: !!createOnly,
+    }),
+  }).then(r => {
+    if (r.ok) return true;
+    if (r.status === 409) return false;
+    return r.json().catch(() => ({}))
+      .then(d => Promise.reject(new Error(d.error || `HTTP ${r.status}`)));
+  });
+}
+
+// HTTP 通道：只提交存档，不带密码
+function patchMeta(username, nextMeta) {
+  return fetch('/api/users', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, meta: nextMeta }),
+  }).then(r => {
+    if (r.ok) return true;
+    return r.json().catch(() => ({}))
+      .then(d => Promise.reject(new Error(d.error || `HTTP ${r.status}`)));
+  });
+}
+
+// 写入账号：HTTP 通道交给服务端哈希，本地通道在这里哈希后再落盘
+function persistAccount(user, createOnly) {
+  if (usesHttpStore()) return pushAccount(user, createOnly);
+  if (createOnly) {
+    return hashPassword(user.password).then(h => { user.password = h; saveUsers(); return true; });
+  }
+  saveUsers();
+  return Promise.resolve(true);
+}
+
 function saveMeta() {
   if (!currentUser) return;
   const u = users.find(x => x.username === currentUser);
-  if (u) { u.meta = meta; saveUsers(); }
+  if (u) u.meta = meta;
+  if (usesHttpStore()) patchMeta(currentUser, meta).catch(() => {});
+  else saveUsers();
 }
 
-function register(username, password) {
+async function register(username, password) {
   username = (username || '').trim();
   if (!username || !password) { loginError('请输入用户名和密码'); return false; }
-  if (users.some(u => u.username === username)) { loginError('用户名已存在'); return false; }
   const u = { username, password, meta: defaultMeta() };
-  users.push(u);
-  saveUsers();
-  currentUser = username;
-  localStorage.setItem('fury_current_user', username);
-  meta = u.meta;
-  renderMenu();
-  showMenu();
+  try {
+    if (!await persistAccount(u, true)) { loginError('用户名已存在'); return false; }
+  } catch (e) {
+    loginError(`注册失败：${(e && e.message) || e}`);
+    return false;
+  }
+  users.push({ username, password: usesHttpStore() ? '' : u.password, meta: u.meta });
+  enterGame(username, u.meta);
   return true;
 }
 
-function login(username, password) {
-  const u = users.find(x => x.username === (username || '').trim() && x.password === password);
-  if (!u) { loginError('用户名或密码错误'); return false; }
-  currentUser = u.username;
-  localStorage.setItem('fury_current_user', u.username);
-  meta = normalizeMeta(u.meta);
+async function login(username, password) {
+  username = (username || '').trim();
+  if (!username || !password) { loginError('请输入用户名和密码'); return false; }
+
+  // 在线通道：密码比对在服务端完成，口令不出服务端
+  if (usesHttpStore()) {
+    let r;
+    try {
+      r = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'login', username, password }),
+      });
+    } catch (e) {
+      loginError(`登录失败：${(e && e.message) || e}`);
+      return false;
+    }
+    if (!r.ok) { loginError('用户名或密码错误'); return false; }
+    const d = await r.json().catch(() => null);
+    if (!d || !d.user) { loginError('登录失败：返回数据异常'); return false; }
+    enterGame(d.user.username, d.user.meta);
+    return true;
+  }
+
+  // 本地通道：自行比对；老存档里的明文口令在登录成功后升级为哈希
+  const u = users.find(x => x.username === username);
+  const verdict = u ? await checkPassword(password, u.password) : 'bad';
+  if (verdict === 'bad') { loginError('用户名或密码错误'); return false; }
+  if (verdict === 'legacy') { u.password = await hashPassword(password); saveUsers(); }
+  enterGame(u.username, u.meta);
+  return true;
+}
+
+// 登录成功后的统一入口
+function enterGame(username, rawMeta) {
+  currentUser = username;
+  localStorage.setItem('fury_current_user', username);
+  meta = normalizeMeta(rawMeta);
   renderMenu();
   showMenu();
-  return true;
 }
 
 function logout() {
@@ -1168,6 +1265,7 @@ function showMenu() {
 
 // ==================== 主页 / 子页面 ====================
 function showHome() {
+  closeBoard();
   document.querySelector('#menu .menu-panel').scrollTop = 0;
   document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -5791,6 +5889,188 @@ function renderMenu() {
   renderTestMode();
 }
 
+// ==================== 排行榜（最久波次） ====================
+// 读取走 /api/leaderboard（服务端用 service 密钥读 scores 表），
+// 实时优先用 Supabase Realtime 的原生 WebSocket 订阅，不可用时降级为轮询。
+let boardTop = [];
+let boardRealtime = null;      // 后端下发的 Realtime 连接信息；null 表示只能轮询
+let boardSocket = null;
+let boardHeartbeat = null;
+let boardFallbackTimer = null;
+let boardPollTimer = null;
+let boardRefreshTimer = null;
+let boardOpen = false;
+
+const BOARD_LIMIT = 50;
+const BOARD_POLL_MS = 8000;
+const BOARD_JOIN_TIMEOUT = 8000;
+const BOARD_HEARTBEAT_MS = 25000;
+
+function boardStatus(msg) {
+  const el = document.getElementById('board-status');
+  if (el) el.textContent = msg;
+}
+
+function renderBoard() {
+  const box = document.getElementById('board-list');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!boardTop.length) {
+    const p = document.createElement('p');
+    p.className = 'dim';
+    p.textContent = '还没有人上榜，去打一局吧';
+    box.appendChild(p);
+    return;
+  }
+  // 玩家名来自其他账号，一律走 textContent，不拼 HTML
+  boardTop.forEach(row => {
+    const el = document.createElement('div');
+    el.className = 'board-row' + (row.username === currentUser ? ' me' : '');
+    const rank = document.createElement('span');
+    rank.className = 'board-rank';
+    rank.textContent = row.rank;
+    const user = document.createElement('span');
+    user.className = 'board-user';
+    user.textContent = row.username;
+    const wave = document.createElement('span');
+    wave.className = 'board-wave';
+    wave.textContent = row.bestWave;
+    el.append(rank, user, wave);
+    box.appendChild(el);
+  });
+}
+
+function fetchBoard() {
+  return fetch(`/api/leaderboard?limit=${BOARD_LIMIT}`)
+    .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    .then(d => {
+      if (!d || !Array.isArray(d.top)) throw new Error('bad payload');
+      boardTop = d.top;
+      boardRealtime = d.realtime || null;
+      renderBoard();
+      boardStatus(boardRealtime ? '实时同步中' : `每 ${BOARD_POLL_MS / 1000} 秒刷新一次`);
+      return true;
+    })
+    .catch(() => { boardStatus('排行榜暂时不可用'); return false; });
+}
+
+// 提交本局成绩。只增不减由服务端（submit_score）保证，这里不需要先比较。
+function submitScore(wave) {
+  if (!currentUser || !usesHttpStore() || !(wave > 0)) return Promise.resolve();
+  return fetch('/api/leaderboard', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: currentUser, bestWave: wave }),
+  }).catch(() => {});
+}
+
+function stopBoardPolling() {
+  if (boardPollTimer) { clearInterval(boardPollTimer); boardPollTimer = null; }
+}
+
+function startBoardPolling() {
+  if (boardPollTimer) return;
+  boardPollTimer = setInterval(fetchBoard, BOARD_POLL_MS);
+}
+
+function closeBoardRealtime() {
+  if (boardFallbackTimer) { clearTimeout(boardFallbackTimer); boardFallbackTimer = null; }
+  if (boardHeartbeat) { clearInterval(boardHeartbeat); boardHeartbeat = null; }
+  if (boardSocket) {
+    const s = boardSocket;
+    boardSocket = null;
+    s.onopen = s.onmessage = s.onerror = s.onclose = null;
+    try { s.close(); } catch (e) {}
+  }
+  if (boardRefreshTimer) { clearTimeout(boardRefreshTimer); boardRefreshTimer = null; }
+}
+
+// 实时通道断开：清掉连接并转轮询兜底，保证榜单不会停在旧数据上
+function fallbackToPolling() {
+  closeBoardRealtime();
+  if (boardOpen) startBoardPolling();
+}
+
+// 返回是否已建立订阅（失败会自动转轮询）
+function connectBoardRealtime() {
+  if (!boardRealtime || typeof WebSocket !== 'function') return false;
+  const { url, key, table } = boardRealtime;
+  let ws;
+  try {
+    ws = new WebSocket(`${url}?apikey=${encodeURIComponent(key)}&vsn=1.0.0`);
+  } catch (e) {
+    return false;
+  }
+  boardSocket = ws;
+
+  ws.onopen = () => {
+    if (boardSocket !== ws) return;
+    ws.send(JSON.stringify({
+      topic: 'realtime:board',
+      event: 'phx_join',
+      payload: { config: { postgres_changes: [{ event: '*', schema: 'public', table }] } },
+      ref: '1',
+      join_ref: '1',
+    }));
+    boardHeartbeat = setInterval(() => {
+      if (boardSocket === ws) ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: 'hb' }));
+    }, BOARD_HEARTBEAT_MS);
+    // 服务端一直没回 phx_reply 就转轮询
+    boardFallbackTimer = setTimeout(() => {
+      if (boardSocket === ws && boardStatus) boardStatus('实时通道未响应');
+      fallbackToPolling();
+    }, BOARD_JOIN_TIMEOUT);
+  };
+
+  ws.onmessage = ev => {
+    if (boardSocket !== ws) return;
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (msg.event === 'phx_reply') {
+      if (msg.payload && msg.payload.status === 'ok') {
+        if (boardFallbackTimer) { clearTimeout(boardFallbackTimer); boardFallbackTimer = null; }
+        boardStatus('实时同步中');
+      } else {
+        fallbackToPolling();
+      }
+      return;
+    }
+    if (msg.event === 'postgres_changes') {
+      // 有人提交了新成绩：短防抖后重新拉榜
+      if (boardRefreshTimer) clearTimeout(boardRefreshTimer);
+      boardRefreshTimer = setTimeout(fetchBoard, 400);
+      return;
+    }
+    if (msg.event === 'phx_error' || msg.event === 'phx_close') fallbackToPolling();
+  };
+
+  ws.onerror = () => { if (boardSocket === ws) fallbackToPolling(); };
+  ws.onclose = () => { if (boardSocket === ws) fallbackToPolling(); };
+  return true;
+}
+
+function openBoard() {
+  if (boardOpen) return;
+  boardOpen = true;
+  boardTop = [];
+  renderBoard();
+  if (!usesHttpStore()) {
+    boardStatus('当前离线游玩，排行榜需要联网');
+    return;
+  }
+  boardStatus('加载中…');
+  fetchBoard().then(() => {
+    if (!boardOpen) return;
+    if (!connectBoardRealtime()) startBoardPolling();
+  });
+}
+
+function closeBoard() {
+  boardOpen = false;
+  closeBoardRealtime();
+  stopBoardPolling();
+}
+
 // 标签切换
 document.querySelectorAll('.tab').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -5800,6 +6080,8 @@ document.querySelectorAll('.tab').forEach(btn => {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'board') openBoard();
+    else closeBoard();
   });
 });
 
@@ -5907,6 +6189,7 @@ document.getElementById('test-apply-basic').onclick = () => {
   meta.coins = coins;
   meta.bestWave = wave;
   saveMeta();
+  submitScore(meta.bestWave);    // 测试模式改动同样计入排行榜
   renderMenu();
   testStatus(`已应用：金币 ${coins} · 最佳波次 ${wave}`);
 };
@@ -5955,30 +6238,39 @@ document.getElementById('btn-login').onclick = () => {
   loginError('');
   login(document.getElementById('login-user').value, document.getElementById('login-pass').value);
 };
-document.getElementById('btn-register').onclick = () => {
+document.getElementById('btn-register').onclick = async () => {
   if (!registerMode) { setLoginMode(true); return; }
   const u = document.getElementById('login-user').value.trim();
   const p = document.getElementById('login-pass').value;
   const p2 = document.getElementById('login-pass2').value;
   if (!u || !p) { loginError('请输入用户名和密码'); return; }
   if (p !== p2) { loginError('两次输入的密码不一致'); return; }
+  // 本地列表可能落后于服务端（好友刚注册过同名），最终以 register() 里的服务端判重为准
   if (users.some(x => x.username === u)) { loginError('用户名已存在'); return; }
-  if (register(u, p)) setLoginMode(false);
+  if (await register(u, p)) setLoginMode(false);
 };
 document.getElementById('btn-back').onclick = () => setLoginMode(false);
 document.getElementById('btn-logout').onclick = logout;
 
-// 启动：先读本地存档文件，再决定进主菜单还是登录页
+// 启动：先确定账号数据来源并恢复登录态，再决定进主菜单还是登录页
 loadUsers().then(() => {
   const savedUser = localStorage.getItem('fury_current_user');
-  if (savedUser && users.some(u => u.username === savedUser)) {
-    currentUser = savedUser;
-    meta = normalizeMeta(users.find(u => u.username === savedUser).meta);
-    renderMenu();
-    showMenu();
-  } else {
-    showLogin();
+  if (!savedUser) { showLogin(); return; }
+
+  // 在线通道：向服务端确认账号仍在，并取回最新存档（接口不返回密码）
+  if (usesHttpStore()) {
+    return fetch(`/api/users?username=${encodeURIComponent(savedUser)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (d && d.user) enterGame(d.user.username, d.user.meta);
+        else { localStorage.removeItem('fury_current_user'); showLogin(); }
+      })
+      .catch(() => showLogin());
   }
+
+  const u = users.find(x => x.username === savedUser);
+  if (u) enterGame(u.username, u.meta);
+  else showLogin();
 });
 requestAnimationFrame(loop);
 requestAnimationFrame(charPreviewLoop);

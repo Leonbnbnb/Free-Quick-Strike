@@ -528,8 +528,8 @@ button:disabled {
 
 .home-nav {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
   margin-top: auto;
 }
 
@@ -1208,6 +1208,70 @@ input[type='checkbox'] {
   #stage:not(.landscape) .control-hint {
     margin-top: 9px;
   }
+}
+
+/* 排行榜（最久波次） */
+.board-head, .board-row {
+  display: grid;
+  grid-template-columns: 34px 1fr 72px;
+  align-items: center;
+  gap: 8px;
+}
+
+.board-head {
+  padding: 0 12px 8px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.board-head span:last-child {
+  text-align: right;
+}
+
+.board-list {
+  min-height: 40px;
+}
+
+.board-row {
+  padding: 11px 12px;
+  margin-bottom: 6px;
+  background: #152f34d9;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.board-row .board-rank {
+  color: var(--gold);
+  font-weight: 700;
+}
+
+.board-row .board-user {
+  overflow: hidden;
+  color: #e7eddf;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-row .board-wave {
+  text-align: right;
+  color: var(--mint);
+  font-weight: 700;
+}
+
+.board-row.me {
+  border-color: var(--mint);
+  background: #1c4340d9;
+}
+
+.board-status {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.board-note {
+  margin-top: 6px;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -93,6 +93,10 @@
               <svg viewBox="0 0 24 24" class="nav-ico"><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>
               <span>背包</span>
             </button>
+            <button class="tab nav-btn" data-tab="board">
+              <svg viewBox="0 0 24 24" class="nav-ico"><path d="M5 20v-8M12 20V4M19 20v-5"/><path d="M3 20h18"/></svg>
+              <span>排行榜</span>
+            </button>
           </div>
           <p class="control-hint"><span>W A S D / 方向键</span> 移动 <i>·</i> 触屏拖动 <i>·</i> 自动攻击</p>
         </div>
@@ -149,6 +153,20 @@
             <button class="tab nav-back" data-tab="home">返回</button>
           </div>
           <div id="list-bag"></div>
+        </div>
+
+        <!-- 排行榜 -->
+        <div id="tab-board" class="tab-panel">
+          <div class="sub-head">
+            <h3>最久波次榜</h3>
+            <button class="tab nav-back" data-tab="home">返回</button>
+          </div>
+          <div class="board-head">
+            <span>排名</span><span>玩家</span><span>最久波次</span>
+          </div>
+          <div id="board-list" class="board-list"></div>
+          <p id="board-status" class="dim board-status" role="status">加载中…</p>
+          <p class="dim board-note">按账号的最久波次排名，每位玩家只占一行；成绩由服务器实时推送。</p>
         </div>
 
         <!-- 金币 -->
