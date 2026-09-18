@@ -7,6 +7,9 @@ dist-new/
 # 运行期数据（账号存档在 data/users.json，勿提交）
 data/users.json
 
+# Vercel CLI 本地链接目录（含项目 ID，勿提交）
+.vercel
+
 # 系统 / 编辑器临时文件
 .DS_Store
 Thumbs.db

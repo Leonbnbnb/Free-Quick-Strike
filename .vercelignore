@@ -1,0 +1,14 @@
+# 桌面端与打包产物，Web 部署用不到
+electron/
+build/
+dist/
+dist-new/
+游戏本体/
+
+# 依赖
+node_modules/
+
+# 运行期存档与本地密钥，绝不部署
+data/
+.env
+.env.local
