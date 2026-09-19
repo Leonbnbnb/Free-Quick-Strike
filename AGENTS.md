@@ -27,7 +27,14 @@
 - 不要提交 `node_modules/`、`dist/`、`data/`（已由 `.gitignore` 排除）。
 - 推送前跑一遍 `git status` 确认没有多余的运行期文件被带进去。
 
-## 4. 代码结构速查
+## 4. 外部服务操作（Supabase / Vercel）
+
+- ⚠️ **不要调用会拉起 Supabase 浏览器授权的工具**（IDE 里的 Supabase 集成、需要 OAuth 的 MCP）。本项目环境下这条路径**拉不起浏览器，调用会一直无响应**，不是报错，是卡住，很浪费时间。
+- 需要读写 Supabase 时，一律走**带访问令牌（`sbp_`）的方式**：本地挂载配了 `SUPABASE_ACCESS_TOKEN` 的官方 `@supabase/mcp-server-supabase`，或直接用 Management API（`POST https://api.supabase.com/v1/projects/<ref>/database/query`）。两种做法与注意事项见 [docs/部署流程.md](docs/部署流程.md) 的 2.1。
+- **Vercel 侧没有这个问题**：本项目的 Vercel MCP 可以直接调用，查环境变量、触发重新部署等都正常，用法见 [docs/部署流程.md](docs/部署流程.md) 的 3.1。
+- 访问令牌只放在**本机的 MCP 配置或环境变量**里，绝不写进仓库、也不写进任何文档。同理，线上密钥只存在于 Vercel 环境变量。
+
+## 5. 代码结构速查
 
 - `js/game.js`：全部游戏逻辑与渲染（单文件）。关键区块：
   - `WEAPON_DEFS` / `ELEMENT_DEFS` / `SUMMON_DEFS` / `PET_DEFS`：四条线的**基础数值定义**（改数值先看这里）
