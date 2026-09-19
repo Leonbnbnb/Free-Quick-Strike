@@ -266,6 +266,8 @@ button:disabled {
 
 #menu {
   padding: 0;
+  /* 作为容器查询的锚点：宽度即舞台宽度，榜单在窄舞台下要换紧凑布局 */
+  container-type: inline-size;
 }
 
 #menu .menu-panel {
@@ -1253,7 +1255,11 @@ input[type='checkbox'] {
 /* 排行榜（最久波次） */
 .board-head, .board-row {
   display: grid;
-  grid-template-columns: 34px 1fr 72px;
+  /* 名次列 / 波次列宽度抽成变量：窄舞台的紧凑布局直接改这两个值。
+     表头与数据行是各自独立的 grid，共用同一组变量才能保持对齐。 */
+  --board-rank-w: 34px;
+  --board-wave-w: 72px;
+  grid-template-columns: var(--board-rank-w) minmax(0, 1fr) var(--board-wave-w);
   align-items: center;
   gap: 8px;
 }
@@ -1368,6 +1374,33 @@ input[type='checkbox'] {
 .board-row.rank-1.me {
   border-color: var(--gold);
   background: linear-gradient(90deg, color-mix(in srgb, var(--mint) 18%, transparent), var(--board-row-bg) 46%);
+}
+
+/* 舞台过窄时（正常布局下两侧固定列会把玩家名挤到只剩几像素）换紧凑布局：
+   收紧名次/波次列、间距与内边距，并让过长的名字换行显示而不是被截掉一小截。
+   用容器查询而非媒体查询——舞台宽度由「显示方向」与视口共同决定，媒体查询对不上。 */
+@container (max-width: 280px) {
+  .board-head,
+  .board-row {
+    --board-rank-w: 22px;
+    --board-wave-w: 46px;
+    gap: 6px;
+  }
+
+  .board-head {
+    padding: 0 9px 6px;
+    font-size: 10px;
+  }
+
+  .board-row {
+    padding: 9px;
+  }
+
+  /* white-space 改为 normal 后 text-overflow: ellipsis 自然失效，长名换行完整显示 */
+  .board-row .board-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 .board-status {
