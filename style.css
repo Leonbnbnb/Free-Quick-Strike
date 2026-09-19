@@ -1358,6 +1358,13 @@ input[type='checkbox'] {
   background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 15%, transparent), var(--board-row-bg) 46%);
 }
 
+/* 榜首名次色往 --ink 收 12%：冠军数字叠在上一条渐变的左端，局部底色被抬高，
+   纯 --gold 在暖纸手绘下只有 4.40:1；收一点拉到 4.5 以上，其余主题本就远超 AA。
+   第 4 名起的金色不需要这一步（它们落在纯行底上）。 */
+.board-row.rank-1 .board-rank {
+  color: color-mix(in srgb, var(--gold) 88%, var(--ink));
+}
+
 .board-row.rank-1.me {
   border-color: var(--gold);
   background: linear-gradient(90deg, color-mix(in srgb, var(--mint) 18%, transparent), var(--board-row-bg) 46%);
