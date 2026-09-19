@@ -43,16 +43,17 @@ node server.js
 
 前端静态资源托管在 Vercel，账号与排行榜由 Serverless Function 写入 Supabase。
 
-1. 在 Supabase 建项目，按顺序执行 `supabase/migrations/` 下的三个脚本（`users` 表、`scores` 表 + Realtime、`password_hash` 列）。
-2. 在 Vercel 项目的 Settings → Environment Variables 配置（**不要**提交到仓库）：
+1. 在 Supabase 建项目，按顺序执行 `supabase/migrations/` 下的四个脚本（`users` 表、`scores` 表 + Realtime、`password_hash` 列、`submit_score` 合理性校验）。
+2. 在 Vercel 项目的 Settings → Environment Variables 配置（**不要**提交到仓库，三个环境都要勾）：
    - `SUPABASE_URL`：Supabase 项目 URL，形如 `https://<project-ref>.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY`：secret / service_role 密钥，仅服务端使用
-   - `SUPABASE_ANON_KEY`：publishable 密钥，用于排行榜的实时订阅（不配则只走轮询）
+   - `SUPABASE_ANON_KEY`：legacy anon / publishable 密钥，用于排行榜的实时订阅（不配则只走轮询）
+   - `SESSION_SECRET`：会话令牌的签名密钥，任意长随机串（不配也能跑，会退化为由服务密钥派生）
 3. 部署：仓库连到 Vercel 后 `main` 分支自动构建，或本地执行 `vercel --prod`。
 
 > 安全：前端从不直连数据库写，`anon` / `authenticated` 在 `users` 上的权限已全部收回（`scores` 仅开放只读，Realtime 订阅所需），只有服务端密钥能读写；密码以 PBKDF2 哈希存储、校验在服务端完成。
 >
-> 环境变量变更后需要重新部署才会生效。
+> 环境变量变更后需要重新部署才会生效（Vercel 不会自动重建），只改变量时可用 MCP 秒级重新部署、不必改代码，做法见 [docs/部署流程.md](docs/部署流程.md) 的 3.1。
 >
 > 完整步骤、验证清单与故障排查见 [docs/部署流程.md](docs/部署流程.md)。
 
