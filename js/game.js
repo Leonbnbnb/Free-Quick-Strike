@@ -6000,6 +6000,19 @@ function boardStatus(msg) {
   if (el) el.textContent = msg;
 }
 
+// 榜首皇冠：静态 SVG 模板（不含任何玩家数据，可以安全地走 innerHTML）
+const CROWN_SVG = '<svg viewBox="0 0 24 19" aria-hidden="true">'
+  + '<path class="crown-body" d="M3.2 16.6 2.4 5.6 8 10.3 12 2.9 16 10.3 21.6 5.6 20.8 16.6Z"/>'
+  + '<path class="crown-band" d="M4.2 13.2h15.6"/>'
+  + '</svg>';
+
+function boardCrown() {
+  const el = document.createElement('span');
+  el.className = 'board-crown';
+  el.innerHTML = CROWN_SVG;
+  return el;
+}
+
 function renderBoard() {
   const box = document.getElementById('board-list');
   if (!box) return;
@@ -6014,13 +6027,19 @@ function renderBoard() {
   // 玩家名来自其他账号，一律走 textContent，不拼 HTML
   boardTop.forEach(row => {
     const el = document.createElement('div');
-    el.className = 'board-row' + (row.username === currentUser ? ' me' : '');
+    el.className = 'board-row'
+      + (row.rank <= 3 ? ` rank-${row.rank}` : '')
+      + (row.username === currentUser ? ' me' : '');
     const rank = document.createElement('span');
     rank.className = 'board-rank';
     rank.textContent = row.rank;
     const user = document.createElement('span');
     user.className = 'board-user';
-    user.textContent = row.username;
+    if (row.rank === 1) user.appendChild(boardCrown());
+    const name = document.createElement('span');
+    name.className = 'board-name';
+    name.textContent = row.username;
+    user.appendChild(name);
     const wave = document.createElement('span');
     wave.className = 'board-wave';
     wave.textContent = row.bestWave;

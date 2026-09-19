@@ -1288,10 +1288,43 @@ input[type='checkbox'] {
 }
 
 .board-row .board-user {
-  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
   color: #e7eddf;
+}
+
+.board-row .board-name {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 榜首皇冠：跟随主题的 --gold；用内联 SVG 而不是 emoji，避免各平台字体差异 */
+.board-crown {
+  display: inline-flex;
+  flex: none;
+}
+
+.board-crown svg {
+  width: 15px;
+  height: 12px;
+  overflow: visible;
+}
+
+.board-crown .crown-body {
+  fill: var(--gold);
+  stroke: #12211d;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+
+.board-crown .crown-band {
+  fill: none;
+  stroke: #12211d;
+  stroke-width: 1.4;
+  stroke-linecap: round;
 }
 
 .board-row .board-wave {
@@ -1303,6 +1336,26 @@ input[type='checkbox'] {
 .board-row.me {
   border-color: var(--mint);
   background: #1c4340d9;
+}
+
+/* 前三名的名次配色：金 / 银 / 铜 */
+.board-row.rank-2 .board-rank {
+  color: #c3cfd4;
+}
+
+.board-row.rank-3 .board-rank {
+  color: #d79a63;
+}
+
+/* 榜首：金色描边 + 左起渐变高亮（放在 .me 之后，保证冠军样式不被覆盖） */
+.board-row.rank-1 {
+  border-color: var(--gold);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 15%, transparent), #152f34d9 46%);
+}
+
+.board-row.rank-1.me {
+  border-color: var(--gold);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--mint) 18%, transparent), #1c4340d9 46%);
 }
 
 .board-status {
