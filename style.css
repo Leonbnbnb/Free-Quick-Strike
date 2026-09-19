@@ -1274,9 +1274,11 @@ input[type='checkbox'] {
 }
 
 .board-row {
+  /* 行底跟随主题（同 .tab / .card 的写法），保证金/银/铜名次与皇冠在各主题下都够清楚 */
+  --board-row-bg: color-mix(in srgb, var(--surface) 92%, transparent);
   padding: 11px 12px;
   margin-bottom: 6px;
-  background: #152f34d9;
+  background: var(--board-row-bg);
   border: 1px solid var(--line);
   border-radius: 12px;
   font-size: 13px;
@@ -1292,7 +1294,7 @@ input[type='checkbox'] {
   align-items: center;
   gap: 5px;
   min-width: 0;
-  color: #e7eddf;
+  color: var(--ink);
 }
 
 .board-row .board-name {
@@ -1334,28 +1336,31 @@ input[type='checkbox'] {
 }
 
 .board-row.me {
+  --board-row-bg: color-mix(in srgb, var(--mint) 10%, var(--surface));
   border-color: var(--mint);
-  background: #1c4340d9;
+  background: var(--board-row-bg);
 }
 
-/* 前三名的名次配色：金 / 银 / 铜 */
+/* 前三名的名次配色：金 / 银 / 铜。
+   行底跟随主题后，银与铜不能写死成浅色——暖纸手绘是浅底，浅色数字会看不清。
+   统一按 --ink 方向收：深色主题下偏亮（银/铜），浅色主题下偏暗。 */
 .board-row.rank-2 .board-rank {
-  color: #c3cfd4;
+  color: color-mix(in srgb, #c3cfd4 30%, var(--ink));
 }
 
 .board-row.rank-3 .board-rank {
-  color: #d79a63;
+  color: color-mix(in srgb, #d79a63 30%, var(--ink));
 }
 
 /* 榜首：金色描边 + 左起渐变高亮（放在 .me 之后，保证冠军样式不被覆盖） */
 .board-row.rank-1 {
   border-color: var(--gold);
-  background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 15%, transparent), #152f34d9 46%);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 15%, transparent), var(--board-row-bg) 46%);
 }
 
 .board-row.rank-1.me {
   border-color: var(--gold);
-  background: linear-gradient(90deg, color-mix(in srgb, var(--mint) 18%, transparent), #1c4340d9 46%);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--mint) 18%, transparent), var(--board-row-bg) 46%);
 }
 
 .board-status {
