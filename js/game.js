@@ -1,6 +1,11 @@
 // ==================== 常量与配置 ====================
 let W = 450, H = 800;               // 屏幕（视口）逻辑尺寸，默认竖屏 9:16，可切换横屏 16:9
-const WORLD = { w: 1000, h: 2400 };   // 扩大后的世界尺寸
+const WORLD = { w: 1800, h: 4200 };   // 世界尺寸（V1.10 两轮扩大：1000×2400 → 1400×3200 → 1800×4200）
+const ZOOM = 0.75;                    // 镜头缩放：视角拉远，可见范围 ≈ ×1.33
+function viewW() { return W / ZOOM; }  // 当前可见的世界宽 / 高（会随显示方向变化）
+function viewH() { return H / ZOOM; }
+// 相对原始地图（1000 × 2400）的面积倍率：地图扩大后，场景物件数量按它等比同步，保持原有密度
+const AREA_SCALE = (WORLD.w * WORLD.h) / (1000 * 2400);
 
 const CFG = {
   soldierCount: 1,     // 初始小兵数量
@@ -533,50 +538,130 @@ function renderPetPreview(t) {
   }
 }
 
+// 局内金币（V1.21：整体砍到约一半，配合局外价格 ×3）
+// —— 普通杂兵（grunt / fast / ranged / hunter）只有 50% 概率掉 1 枚（期望 0.5），它们占了绝大多数击杀；
+// —— 其余来源直接把基数下调：精英 5→3、Boss 50→25、树怪 6→3、木桶 3→1、箱子 5→2、特殊小怪 2~3 → 1。
+// 大额来源保持「必掉」，避免击杀首领 / 精英时偶尔颗粒无收的观感。
+const MOB_COIN_CHANCE = 0.5;
+const MOB_TYPES = new Set(['grunt', 'fast', 'ranged', 'hunter']);
+function coinDrop(type) {
+  const base = (ENEMY_TYPES[type] || {}).coin || 0;
+  if (!base) return 0;
+  return (MOB_TYPES.has(type) && Math.random() >= MOB_COIN_CHANCE) ? 0 : base;
+}
+
 const ENEMY_TYPES = {
-  grunt:  { hp: 30,  speed: 70,  r: 14, dmg: 8,  color: '#e05555', xp: 12, coin: 1 },
-  fast:   { hp: 16,  speed: 130, r: 10, dmg: 5,  color: '#f0a030', xp: 9,  coin: 1 },
-  ranged: { hp: 28,  speed: 55,  r: 13, dmg: 7,  color: '#d98bd0', xp: 15, coin: 1, range: 300, shootInterval: 1.4, bulletSpeed: 220 },
-  elite:  { hp: 220, speed: 45,  r: 26, dmg: 20, color: '#b05fe0', xp: 130, coin: 5 },
-  boss:   { hp: 1400, speed: 35, r: 40, dmg: 30, color: '#c0392b', xp: 320, coin: 50 },
+  grunt:  { hp: 46,  speed: 70,  r: 21, dmg: 11, color: '#e05555', xp: 12, coin: 1 },
+  fast:   { hp: 26,  speed: 130, r: 19, dmg: 7,  color: '#f0a030', xp: 9,  coin: 1 },   // 速度最快的贴身怪：体型单独再放大，避免在拉远的视角下显得过小
+  ranged: { hp: 44,  speed: 55,  r: 20, dmg: 10, color: '#d98bd0', xp: 15, coin: 1, range: 300, shootInterval: 1.4, bulletSpeed: 220 },
+  elite:  { hp: 150, speed: 62,  r: 28, dmg: 16, color: '#b05fe0', xp: 55,  coin: 2 },   // V1.24：改为「低压成群」的小精英，强度交给词缀（见 AFFIX_DEFS）
+  boss:   { hp: 2600, speed: 35, r: 46, dmg: 30, color: '#c0392b', xp: 320, coin: 25 },   // V1.25：体型 40 → 46；V1.26.1：接触 38 → 30（玩家初始血池只有 100）
 
   // ---- 特殊敌人 ----
-  bomber:  { hp: 26, speed: 100, r: 13, dmg: 0,  color: '#8a4a2a', xp: 14, coin: 2, boomR: 72, boomDmg: 22 },
-  hunter:  { hp: 34, speed: 48,  r: 14, dmg: 6,  color: '#d06a8a', xp: 17, coin: 1, range: 340, shootInterval: 2.4, bulletSpeed: 130, homing: true },
-  healer:  { hp: 42, speed: 52,  r: 15, dmg: 4,  color: '#4dd07a', xp: 22, coin: 3, healR: 200, healAmount: 14, healInterval: 2.4 },
-  shielder:{ hp: 46, speed: 62,  r: 16, dmg: 9,  color: '#5fb0d0', xp: 20, coin: 2, giftR: 170, giftAmount: 14, giftInterval: 4 },
-  summoner:{ hp: 58, speed: 44,  r: 17, dmg: 6,  color: '#a06cd0', xp: 24, coin: 3, summonInterval: 5 },
+  bomber:  { hp: 40, speed: 100, r: 20, dmg: 0,  color: '#8a4a2a', xp: 14, coin: 1, boomR: 72, boomDmg: 30 },
+  hunter:  { hp: 52, speed: 48,  r: 21, dmg: 9,  color: '#d06a8a', xp: 17, coin: 1, range: 340, shootInterval: 2.4, bulletSpeed: 130, homing: true },
+  healer:  { hp: 64, speed: 52,  r: 23, dmg: 6,  color: '#4dd07a', xp: 22, coin: 1, healR: 200, healAmount: 20, healInterval: 2.4 },
+  shielder:{ hp: 70, speed: 62,  r: 24, dmg: 12, color: '#5fb0d0', xp: 20, coin: 1, giftR: 170, giftAmount: 20, giftInterval: 4 },
+  summoner:{ hp: 88, speed: 44,  r: 25, dmg: 9,  color: '#a06cd0', xp: 24, coin: 1, summonInterval: 5 },
 
   // 树木被长时间靠近后苏醒的树怪（血量较厚，仅由场景树木转化而来）
-  treant:  { hp: 180, speed: 34,  r: 24, dmg: 18, color: '#5f8b4c', xp: 90, coin: 6 },
+  treant:  { hp: 240, speed: 34,  r: 36, dmg: 24, color: '#5f8b4c', xp: 90, coin: 3 },
 };
+
+// 「重装单位」：基础血量本来就高，如果吃满整条成长曲线，后期血量会反超首领。
+// 这里把它们的曲线折半（倍率 = 1 + (全场倍率 - 1) × 系数），保留前期的基数优势。
+const HEAVY_HP_CURVE = { elite: 0.5, treant: 0.5 };
+
+// ---- 精英词缀（V1.24）----
+// 精英本体很弱（见 ENEMY_TYPES.elite），威胁全部来自随机词缀：每只精英必带 1 个，
+// 第 25 波起带 2 个（互不重复）。词缀尽量复用已有机制（护盾 / 光环 / 爆炸 / 分裂）。
+// color 用于血条上方的标识圆点，方便一眼分辨这波精英要怎么打。
+const ELITE_AFFIX_TWO_WAVE = 25;      // 从这一波起，精英带 2 个词缀
+const ELITE_SPLIT_HP = 0.35;          // 分裂出的子精英血量倍率
+const ELITE_BOOM_R = 95;              // 殉爆半径
+const ELITE_BOOM_DMG = 22;            // 殉爆伤害（基础值，实伤再乘 difficulty）
+const ELITE_WARD_R = 200;             // 守卫光环半径
+const ELITE_WARD_AMOUNT = 15;         // 守卫每次给出的护盾
+const ELITE_WARD_INTERVAL = 3;        // 守卫施放间隔（秒）
+
+const AFFIX_DEFS = {
+  shield:   { name: '护盾', color: '#7fd8ff', desc: '额外一层护盾', apply(e) { e.shieldMax = Math.round(e.maxHp * 0.8); e.shield = e.shieldMax; } },
+  swift:    { name: '迅捷', color: '#f0e05a', desc: '移速 +45%', apply(e) { e.speed *= 1.45; } },
+  berserk:  { name: '狂暴', color: '#ff6b4a', desc: '半血后移速与伤害 +50%', apply(e) { e.affixBerserk = true; } },
+  split:    { name: '分裂', color: '#c07bff', desc: '死亡时裂成 2 只残血小精英', apply(e) { e.affixSplit = true; } },
+  volatile: { name: '殉爆', color: '#ff9d3b', desc: '死亡时原地爆炸', apply(e) { e.affixVolatile = true; } },
+  ward:     { name: '守卫', color: '#5fb0d0', desc: '周期给附近小怪套护盾', apply(e) { e.affixWard = true; e.wardCd = ELITE_WARD_INTERVAL; } },
+};
+
+// 随机抽取 n 个不重复词缀（n 由当前波次决定）
+function rollAffixes() {
+  const n = wave >= ELITE_AFFIX_TWO_WAVE ? 2 : 1;
+  const pool = Object.keys(AFFIX_DEFS);
+  const out = [];
+  while (out.length < n && pool.length) {
+    out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return out;
+}
 
 // 场景植物（第一波 Boss 之后随世界变化出现）
 const FLORA_CFG = {
-  tree: { r: 24, nearR: 80, aggroTime: 3.5, decay: 0.6, growTime: 2.6 },   // 破土长出 2.6s；靠近 3.5s 变树怪
+  tree: { r: 24, nearR: 80, aggroTime: 3.5, decay: 0.6, growTime: 2.6, bossAggroMul: 3.5 },   // 破土长出 2.6s；靠近 3.5s 变树怪；首领撞上按 3.5 倍速积累（1s 苏醒）
   vine: { triggerR: 110, grabR: 62, windTime: 0.9, holdTime: 1.8, minLife: 25, maxLife: 40, cooldown: 2.5, growTime: 1.0 },
 };
 
 // Boss 冲刺技能参数
 // 冲刺是首领的高威胁技能，单独定义伤害，避免误用普通接触伤害。
-// 初始队伍血池为 100，命中一次约削减 70%，仍受护甲、护盾和闪避影响。
-const BOSS_SKILL = { chargeTime: 1.0, dashSpeed: 880, dashTime: 0.42, cooldown: 6, firstDelay: 4, damage: 70 };
+// 初始队伍血池为 100，命中一次约削减 65%（V1.26.1：80 → 65，配合接触伤害下调），仍受护甲、护盾和闪避影响。
+const BOSS_SKILL = { chargeTime: 1.0, dashSpeed: 880, dashTime: 0.42, cooldown: 6, firstDelay: 4, damage: 65, aimRate: 6, trackFrac: 0.4 };
+// aimRate = 蓄力期间转身瞄准的速度（rad/s），保证追踪阶段内能转到目标身上
+// trackFrac = 蓄力前多大比例用来「继续转身瞄准」（V1.26.2），之后方向锁死、指示带停住 ——
+//   否则指示带每帧都精确指着玩家（实测误差恒为 0°），既读不出该往哪躲，看起来又像原地打转。
+//   用比例而不是固定秒数：二阶段连冲的前摇只有 0.45s，固定 0.4s 等于几乎不锁定。
 
 // Boss 种类（每 10 波轮换）
+// 血量基准只在「第 1 个 Boss」生效，之后由 bossHpScale() 按已击败首领数放大
+// orbitR = 走位想维持的「与玩家的距离」（V1.25 起不再直线追击，见 moveBoss）
 const BOSS_KINDS = {
-  charge:   { name: '冲锋者', color: '#c0392b', hp: 1400, speed: 35 },
-  barrage:  { name: '弹幕者', color: '#8e44ad', hp: 1300, speed: 28 },
-  summoner: { name: '召唤者', color: '#16a085', hp: 1500, speed: 30 },
-  splitter: { name: '分裂者', color: '#d35400', hp: 1600, speed: 40 },
+  charge:   { name: '冲锋者', color: '#c0392b', hp: 2600, speed: 35, orbitR: 150 },
+  barrage:  { name: '弹幕者', color: '#8e44ad', hp: 2400, speed: 28, orbitR: 300 },
+  summoner: { name: '召唤者', color: '#16a085', hp: 2800, speed: 30, orbitR: 300 },
+  splitter: { name: '分裂者', color: '#d35400', hp: 3000, speed: 40, orbitR: 110 },
 };
+
+// 首领竞技场：出场时以玩家当前位置为场心划一块圆形场地，**只禁止玩家走出**；
+// 首领与小怪可以自由进出（否则首领冲刺出去后玩家就被困在打不到它的圈里）。首领阵亡即解除。
+const BOSS_ARENA_R = 600;    // 场地半径（世界单位，直径 1200 = 屏幕可见宽度的 2 倍）
+let bossArena = null;        // { x, y, r } —— 场心取首领出场时的玩家位置
 const BOSS_ORDER = ['charge', 'barrage', 'summoner', 'splitter'];
+
+// ---- 首领「灵活性」层（V1.25 新增）----
+// 首领移速只有 28~40，而部队是 240 —— 直线追击毫无意义，首领实质是「站着放技能的炮台」。
+// 所以这一层不加基础移速（数值不动），而是给它两件事：
+//   ① 轨道走位：维持各自的中距离 + 横向绕圈（玩家不能再无脑绕背）；
+//   ② 位移：冲锋者冲刺 / 分裂者突进（爆发式移动，比堆移速更可控、也更好读）。
+// 旧版的「滑步闪避」已全部取消（V1.25.1）：首领横移一下会让技能前摇读不清、表现突兀。
+// 弹幕者「后跃 180」与召唤者「闪现 340」（两种纯挪位置、无伤害的位移）也于 V1.25.1 注释停用，代码保留以便恢复。
+// V1.26.2：径向修正改按偏差比例给（旧版是开关式，会停在死区边缘）、绕行方向翻转间隔拉长（旧版走不完一段弧就折返）。
+const BOSS_MOVE = {
+  band: 45,          // 径向修正满速带宽：偏差达到这个量给满速，内部按比例缩放（不再是开关式的 0/±1）
+  strafe: 0.9,       // 绕圈速度占基础移速的比例
+  flipMin: 6,        // 绕行方向翻转间隔（秒，随机区间）。太短会「一段弧都没走完就折返」，看起来像原地抖
+  flipMax: 11,
+  turnRate: 3.2,     // 朝向平滑角速度（rad/s），防止每帧抖动
+};
+// const BOSS_LEAP = { time: 0.3 };         // （V1.25.1 停用）通用位移时长（速度 = 距离 / 时长），仅弹幕者后跃用
+const BOSS_SHOCK = { r: 150, dmg: 20 };     // 冲锋落点震波
+const BOSS_SUMMON = { wind: 0.9, r: 150 };  // 召唤阵：预警时长 / 阵半径
+const BOSS_BITE = { speed: 760, time: 0.26, dmg: 20 };   // 分裂者突进撕咬
+// const BOSS_BLINK = { r: 340, cd: 6 };    // （V1.25.1 停用）召唤者贴身闪现
 
 
 // 武器（局外携带，攻击间隔作为 CD）
 const WEAPON_DEFS = {
-  rifle:  { name: '步枪', dmg: 15, reload: 0.9, speed: 640, range: 380, color: '#ffe066', baseCount: 1 },
-  shotgun:{ name: '散弹', dmg: 6,  reload: 1.4, speed: 560, range: 300, color: '#9be060', baseCount: 5, spread: 0.28, converge: 110, offset: 5, falloff: { near: 110, far: 170, nearMul: 1.4, farMul: 0.35 } },
-  laser:  { name: '机枪', dmg: 7,  reload: 0.35, speed: 900, range: 420, color: '#ff4d8d', baseCount: 1 },
+  rifle:  { name: '步枪', dmg: 17, reload: 0.9, speed: 640, range: 380, color: '#ffe066', baseCount: 1 },
+  shotgun:{ name: '散弹', dmg: 7,  reload: 1.4, speed: 560, range: 300, color: '#9be060', baseCount: 6, spread: 0.28, offset: 5, falloff: { near: 110, far: 170, nearMul: 1.4, farMul: 0.35 } },   // 6 枚弹丸 · 弹道自枪口起就是发散扇形（V1.23 去掉 converge 收束，不再交叉）
+  laser:  { name: '机枪', dmg: 9,  reload: 0.35, speed: 900, range: 420, color: '#ff4d8d', baseCount: 1 },
   sniper: { name: '狙击枪', dmg: 38, reload: 2.0, speed: 1150, range: 520, color: '#c8b3ff', baseCount: 1, pierce: 1, tracer: true },
 };
 
@@ -587,8 +672,8 @@ const ELEMENT_DEFS = {
     init: { aoeMul: 1, ignite: false, burnTime: 1, killExplode: false, killDmg: 15, killRadius: 60 },
   },
   lightning: {
-    cls: 'ele', name: '雷电', dmg: 18, cd: 1.5, color: '#9de0ff',
-    init: { chain: 0, strikes: 1 },
+    cls: 'ele', name: '雷电', dmg: 18, color: '#9de0ff',
+    init: { chainLv: 0 },
   },
   ice: {
     cls: 'ele', name: '冰刺', dmg: 18, cd: 1.6, targets: 1, range: 260, speed: 470, spikeR: 7, slowMul: 0.55, slowTime: 2.2, color: '#8fe3ff',
@@ -625,7 +710,7 @@ const PET_DEFS = {
 const PET_DEV_CFG = {
   lvMax: 20,
   starMax: 5,
-  eggCost: 60,          // 抽一次宠物蛋
+  eggCost: 180,         // 抽一次宠物蛋（V1.21：60 → 180，随全局价格 ×3）
   shardPerStar: 10,     // 升 1 星所需碎片
   expPerDmg: 0.1,       // 宠物造成 10 点伤害 = 1 点熟练度
 };
@@ -669,15 +754,38 @@ const ITEM_DEFS = {
   orb:  { name: '回血宝珠', regen: 2 },   // 每秒回复 2 点队伍血池
 };
 
-// Boss 击败后的强力 Buff（概率出现）
-// 元素类奖励只在拥有元素伤害来源时出现，避免出现纯减益的选项
+// Boss 击败后的强力 Buff（首领专属，池子里不会有普通升级卡）
+// 「力量权柄 / 元素亲和」是一对**互斥的路线取舍卡**：一次性（once）且二选一（exclusive），
+// 选了一张另一张本局不再出现。代价只走加算区，所以另一条线之后仍可继续投资把它补回来
+// （参考 20 Minutes Till Dawn 的取舍型 Synergy）。
+// V1.16：一次性奖励**全部去掉前置**（原本元素线要 `hasElementalSource`、闪电 / 召唤之力要
+// 已解锁对应召唤物），改成任何时候都能被抽到与选择——选到对自己当前 Build 无用的卡由玩家自负。
+// 奖励分两类：
+//   ① 一次性奖励（`once`）：机制级质变卡，每张只能拿一次，靠 appliedIds 去重。
+//      **不带前置**：任何一张任何时候都能被抽到、被选择（代价自负，见各卡 desc）；
+//      只有「力量权柄 / 元素亲和」保留互斥（`exclusive`），二者选一张另一张本局不再出现。
+//   ② 可重复补位卡（`repeat`）：通用数值成长卡。**平时不出现在面板上**，只有当一次性奖励
+//      被拿空、候选凑不满面板张数时，才拿来补满（见 `openBossReward()`），避免出现空格子。
+//      它们的数值刻意高于普通升级卡（普通卡：移速 +12% / 生命 +20% / 拾取 +30%），
+//      作为后期的「无限成长出口」。
 const BOSS_BUFFS = [
-  { id: 'buff-dmg50', name: '伤害 +50%', desc: '子弹伤害 +50%（同类加成相加）', apply() { addDamageBonus('bullet', 0.5); } },
-  { id: 'buff-reload100', name: '射速 +100%', desc: '攻击速度翻倍', apply() { weapons.forEach(w => w.rateMul = (w.rateMul || 1) * 2); } },
-  { id: 'buff-ele100', name: '元素伤害 +100%（子弹 -50%）', desc: '元素加成 +100%、子弹加成 -50%（同类相加）', req: hasElementalSource, apply() { addDamageBonus('ele', 1); addDamageBonus('bullet', -0.5); } },
-  { id: 'buff-bullet50-ele0', name: '子弹伤害 +50%（元素归零）', desc: '子弹加成 +50%，已累积的元素加成清零', req: hasElementalSource, apply() { dmgBonus.ele = -1; addDamageBonus('bullet', 0.5); } },
-  { id: 'buff-ele-trigger', name: '元素触发频率 +50%', desc: '火球/雷电/冰刺冷却更短（同类相加）', req: () => hasSummon('fireball') || hasSummon('lightning') || hasSummon('ice'), apply() { eleRateBonus += 0.5; recalcDamage(); } },
+  { id: 'buff-rage', name: '狂暴', desc: '射速 +66%、子弹伤害 -50%（仅一次）', once: true, apply() { weapons.forEach(w => w.rateMul = (w.rateMul || 1) * 1.66); addDamageBonus('bullet', -0.5); } },
+  { id: 'buff-might', name: '力量权柄', desc: '子弹伤害 +50%、元素伤害 -30%、射速 -20%（同类相加，与「元素亲和」二选一，仅一次）', once: true, exclusive: 'dmg-route', apply() { addDamageBonus('bullet', 0.5); addDamageBonus('ele', -0.3); weapons.forEach(w => w.rateMul = (w.rateMul || 1) * 0.8); } },
+  { id: 'buff-ele-affinity', name: '元素亲和', desc: '子弹伤害 -50%、元素伤害 +35%、点燃/减速/冰冻的持续时间 +35%（同类相加，与「力量权柄」二选一，仅一次）', once: true, exclusive: 'dmg-route', apply() { addDamageBonus('bullet', -0.5); addDamageBonus('ele', 0.35); stats.statusDuration = (stats.statusDuration || 1) * 1.35; } },
+  { id: 'buff-summon-power', name: '召唤之力', desc: '召唤物伤害 +50%、召唤物攻速 +50%（按各自机制生效，同类相加，仅一次）', once: true, apply() { addDamageBonus('summon', 0.5); summons.forEach(s => s.rateMul = (s.rateMul || 1) * 1.5); } },
+  { id: 'buff-blink', name: '遁术', desc: '移动速度 +50%、闪避率 +30%（闪避上限仍为 60%，仅一次）', once: true, apply() { stats.moveSpeed *= 1.5; stats.dodge = Math.min(0.6, (stats.dodge || 0) + 0.3); } },
+  // ↓ 以下 5 张是**可重复补位卡**（数值高于普通升级卡），只在一次性奖励凑不满面板时补位
+  { id: 'buff-hp', name: '生命上限 +50%', desc: '队伍血池上限提升，并立刻回复等量生命（可重复获得）', repeat: true, apply() { stats.maxHp *= 1.5; const before = squadMaxHp; refreshSquadPool(); squadHp += Math.max(0, squadMaxHp - before); } },
+  { id: 'buff-vuln', name: '易伤 +30%', desc: '敌人受到的所有伤害 +30%（同类相加，可重复获得）', repeat: true, apply() { stats.vuln = (stats.vuln || 0) + 0.3; } },
+  { id: 'buff-regen', name: '每秒回复 +5', desc: '队伍血池每秒额外回复 5 点（可重复获得）', repeat: true, apply() { stats.regen = (stats.regen || 0) + 5; } },
+  { id: 'buff-move', name: '移速 +30%', desc: '部队移动更快（可重复获得）', repeat: true, apply() { stats.moveSpeed *= 1.3; } },
+  { id: 'buff-pickup', name: '拾取范围 +100%', desc: '经验光球磁吸更远（可重复获得）', repeat: true, apply() { stats.pickupRange *= 2; } },
 ];
+
+// 某个互斥组是否已经有卡被选过（用于 Boss 奖励的去重与二选一）
+function hasExclusivePicked(group) {
+  return BOSS_BUFFS.some(b => b.exclusive === group && appliedIds.has(b.id));
+}
 
 // 进化（终极形态）：需要本路线强化达到一定次数 + 满足专属前置，之后以低权重随机出现
 const EVOLUTIONS = [
@@ -712,29 +820,10 @@ const EVOLUTIONS = [
     apply() { const w = getWeapon('sniper'); w.pierce = (w.pierce || 0) + 3; w.dmgMul *= 1.7; w.speedMul = (w.speedMul || 1) * 1.3; },
   },
   {
-    id: 'evo-fireball', name: '进化 · 烈焰风暴', desc: '火球：数量 +2、爆炸范围 +50%、点燃 +1s、伤害 +30%',
-    route: 'fireball', need: 3,
-    req: () => { const s = getSummon('fireball'); return !!s && !!s.ignite && !!s.killExplode; },
-    apply() { const s = getSummon('fireball'); s.extraCount += 2; s.aoeMul *= 1.5; s.burnTime += 1; summonMore('fireball', 1.3); },
-  },
-  {
-    id: 'evo-lightning', name: '进化 · 苍穹雷暴', desc: '雷电：次数 +2、链式上限 +2、伤害 +30%',
+    id: 'evo-lightning', name: '进化 · 苍穹雷暴', desc: '雷电：额外闪电 +2、伤害 +30%',
     route: 'lightning', need: 3,
-    req: () => { const s = getSummon('lightning'); return !!s && (s.chain || 0) >= 3; },
-    apply() { const s = getSummon('lightning'); s.extraCount += 2; s.chain += 2; summonMore('lightning', 1.3); },
-  },
-  {
-    id: 'evo-ice', name: '进化 · 绝对零度', desc: '冰刺：目标 +2、范围 +40%、霜冻更强、冰冻概率 +25%',
-    route: 'ice', need: 3,
-    req: () => { const s = getSummon('ice'); return !!s && (s.freezeChance || 0) > 0; },
-    apply() {
-      const s = getSummon('ice');
-      s.extraTargets += 2;
-      s.rangeMul = (s.rangeMul || 1) * 1.4;
-      s.slowMul = Math.max(0.45, (s.slowMul || 1) * 0.7);
-      s.freezeChance = Math.min(0.6, (s.freezeChance || 0) + 0.25);
-      summonMore('ice', 1.3);
-    },
+    req: () => { const s = getSummon('lightning'); return !!s && (s.chainLv || 0) >= 3; },
+    apply() { const s = getSummon('lightning'); s.chainLv = Math.min(4, (s.chainLv || 0) + 2); summonMul('lightning', 1.3); },
   },
   {
     id: 'evo-scythe', name: '进化 · 死神镰刀', desc: '镰刀：数量 +2、伤害 +40%、吸血 30%、子弹碰到刀刃即被斩落',
@@ -757,34 +846,34 @@ const SKILL_DEFS = {
 
 // 可破坏物 / 掩体 / 树木
 const OBSTACLE_DEFS = {
-  barrel: { r: 15, hp: 40, coin: 3, xp: 8, color: '#9c6a35', dark: '#7d5327' },
-  crate: { r: 17, hp: 60, coin: 5, xp: 12, color: '#b3813f', dark: '#8f6832' },
+  barrel: { r: 15, hp: 40, coin: 1, xp: 8, color: '#9c6a35', dark: '#7d5327' },
+  crate: { r: 17, hp: 60, coin: 2, xp: 12, color: '#b3813f', dark: '#8f6832' },
   pillar: { r: 20, hp: Infinity, coin: 0, xp: 0, color: '#8d97a1', dark: '#6f7883' },
   tree: { r: FLORA_CFG.tree.r, hp: Infinity, coin: 0, xp: 0, color: '#4e7a3a', dark: '#2f4a22' },
 };
 
-// 商店 / 局外解锁配置
+// 商店 / 局外解锁配置（V1.21：价格统一 ×3，配合局内金币减半，拉长局外养成周期）
 const SHOP = {
   weapons: {
     rifle: { name: '步枪', cost: 0, desc: '单发直射' },
-    shotgun: { name: '散弹', cost: 200, desc: '扇形多发弹丸' },
-    laser: { name: '机枪', cost: 300, desc: '高速连射' },
-    sniper: { name: '狙击枪', cost: 400, desc: '高额单发伤害 · 自带穿透 · 射速很慢' },
+    shotgun: { name: '散弹', cost: 600, desc: '扇形多发弹丸' },
+    laser: { name: '机枪', cost: 900, desc: '高速连射' },
+    sniper: { name: '狙击枪', cost: 1200, desc: '高额单发伤害 · 自带穿透 · 射速很慢' },
   },
   equipment: {
     none: { name: '无', cost: 0, desc: '无额外效果' },
-    leather: { name: '皮甲', cost: 100, desc: '受伤 -15%' },
-    charm: { name: '力量护符', cost: 150, desc: '伤害 +15%' },
-    blood: { name: '血珠', cost: 260, desc: '造成伤害时 5% 概率回复该次伤害的 5%' },
+    leather: { name: '皮甲', cost: 300, desc: '受伤 -15%' },
+    charm: { name: '力量护符', cost: 450, desc: '伤害 +15%' },
+    blood: { name: '血珠', cost: 780, desc: '造成伤害时 5% 概率回复该次伤害的 5%' },
   },
   items: {
     none: { name: '无', cost: 0, desc: '无额外效果' },
-    orb: { name: '回血宝珠', cost: 200, desc: '每秒回复 2 点队伍生命' },
+    orb: { name: '回血宝珠', cost: 600, desc: '每秒回复 2 点队伍生命' },
   },
   pets: {
     none: { name: '无', cost: 0, desc: '无宠物' },
-    dragon: { name: '龙蛋', cost: 150, desc: '悬浮右上方攻击并点燃' },
-    fairy: { name: '火焰精灵', cost: 250, desc: '快速连射并点燃' },
+    dragon: { name: '龙蛋', cost: 450, desc: '悬浮右上方攻击并点燃' },
+    fairy: { name: '火焰精灵', cost: 750, desc: '快速连射并点燃' },
   },
 };
 
@@ -803,7 +892,7 @@ let users = [];
 let currentUser = null;
 let meta = defaultMeta();
 
-let squad = { x: WORLD.w / 2, y: WORLD.h / 2, tx: WORLD.w / 2, ty: WORLD.h / 2, moving: false, shield: 0, shieldMax: 0, shieldRegenTimer: 0, invulnT: 0 };
+let squad = { x: WORLD.w / 2, y: WORLD.h / 2, tx: WORLD.w / 2, ty: WORLD.h / 2, moving: false, shield: 0, shieldMax: 0, shieldRegenTimer: 0, invulnT: 0, invulnCdT: 0 };
 let soldiers = [];
 // 小兵共享血池：总量 = 小兵数 × 单个小兵血量；掉掉一格血就少一个小人
 let squadHp = 0;
@@ -842,10 +931,12 @@ let routePicks = {};
 let stats = {
   moveSpeed: 1, maxHp: 1,
   bulletDamage: 1,     // 子弹伤害（武器）
-  elementalDamage: 1,  // 元素伤害（火球/雷电/冰刺/燃烧）
+  elementalDamage: 1,  // 元素伤害（雷电/点燃）
   summonDamage: 1,     // 召唤物伤害（镰刀/飞剑）
   petDamage: 1,        // 宠物伤害（龙蛋）
-  pickupRange: 1, invulnDuration: 0, damageTaken: 1, dodge: 0, bulletKnockback: 0, elementalCd: 1,
+  pickupRange: 1, invulnDuration: 0, damageTaken: 1, dodge: 0, bulletKnockback: 0,
+  burnDamage: 0,             // 点燃伤害加成（「严重灼伤」）
+  statusDuration: 1,         // 异常元素效果（点燃/减速/冰冻）的持续时间倍率（「元素亲和」）
   vuln: 0,             // 易伤：敌人受到的伤害加成（同类加算）
   lifesteal: 0,        // 吸血：造成伤害后按比例回复队伍血池（同类加算）
   regen: 0,            // 每秒回复队伍血池（回血宝珠）
@@ -857,10 +948,13 @@ let stats = {
 //   最终伤害 = 基础值 × (1 + 同类加成之和) × 独立乘区
 // 同类百分比一律「加算」，避免同类加成反复相乘造成指数爆炸（或把某一路直接压到 0）；
 // 只有局外装备、进化这类独立来源才进乘算区。减益同样进加算区，并留下限。
+// 下限只作用在「加算区」这一层（不给独立乘区加下限），四路统一：
+//   子弹 / 召唤 / 宠物：0.3（最低保留 30%）；元素：0（保留「可被归零」这一设计杠杆）
 const DMG_FLOOR = 0.3;                                     // 单路伤害最低保留 30%
+const INVULN_CD = 3;                                       // 受伤免疫的冷却（触发时刻起算）
+const WEAPON_RATE_CAP = 2;                                 // 武器射速上限：rateMul 最多 +100%（卡片可以继续拿，但不再加速）
 let dmgBonus = { bullet: 0, ele: 0, summon: 0, pet: 0 };    // 加算区（0.3 = +30%）
 let dmgBase = { bullet: 1, ele: 1, summon: 1, pet: 1 };     // 独立乘区（局外装备）
-let eleRateBonus = 0;                                       // 元素触发频率（加算）
 let pickCount = {};                                         // 可重复卡的已获取次数（用于限次）
 
 function addDamageBonus(type, pct) {
@@ -869,14 +963,27 @@ function addDamageBonus(type, pct) {
 }
 
 function recalcDamage() {
-  stats.bulletDamage = Math.max(DMG_FLOOR, dmgBase.bullet * (1 + dmgBonus.bullet));
-  stats.elementalDamage = Math.max(0, dmgBase.ele * (1 + dmgBonus.ele));   // 元素可被「清零」
-  stats.summonDamage = Math.max(DMG_FLOOR, dmgBase.summon * (1 + dmgBonus.summon));
-  stats.petDamage = Math.max(DMG_FLOOR, dmgBase.pet * (1 + dmgBonus.pet));
-  stats.elementalCd = 1 / (1 + eleRateBonus);
+  // 下限只罩住「1 + 加算区」，不罩局外装备（否则装备加成会被极端减益一起压掉）
+  stats.bulletDamage = dmgBase.bullet * Math.max(DMG_FLOOR, 1 + dmgBonus.bullet);
+  stats.elementalDamage = dmgBase.ele * Math.max(0, 1 + dmgBonus.ele);   // 元素可被「归零」
+  stats.summonDamage = dmgBase.summon * Math.max(DMG_FLOOR, 1 + dmgBonus.summon);
+  stats.petDamage = dmgBase.pet * Math.max(DMG_FLOOR, 1 + dmgBonus.pet);
 }
 
-function canPick(id, max) { return (pickCount[id] || 0) < max; }
+// 调试开关（局内调试面板，V1.26）
+// devForcePool 为 true 时升级池放行全部「前置 / 上限 / 二选一」门控；它只被卡牌页临时打开（用于列出全部卡牌），
+// 其余开关默认都是「不改变正常玩法」的状态，且每局重开时由 devResetTransient() 复位。
+let devForcePool = false;      // 卡池忽略前置
+let devSpeed = 1;              // 游戏速度倍率（乘在主循环的 dt 上）
+let devFreezeWave = false;     // 冻结波次计时
+let devInvuln = false;         // 玩家无敌
+let devOneShot = false;        // 一击必杀
+let devHudOpen = false;        // 调试面板是否展开
+let devInfoOn = false;         // 是否显示信息浮层
+let devCardCat = 'all';        // 卡牌页当前分类
+
+function poolGate(ok) { return devForcePool || ok; }
+function canPick(id, max) { return devForcePool || (pickCount[id] || 0) < max; }
 function markPick(id) { pickCount[id] = (pickCount[id] || 0) + 1; }
 
 let camera = { x: 0, y: 0 };
@@ -884,7 +991,10 @@ let wave = 1;
 let kills = 0;
 let level = 1;
 let xp = 0;
-let xpToNext = 15;
+// 升级所需经验（V1.11 提高）：基础值 15 → 22，成长系数 1.25 / +5 → 1.32 / +6
+// 递增序列：22 / 35 / 52 / 74 / 103 / 141 / 192 / 259 / 348 / 465 …（旧版 15 / 23 / 33 / 46 / 62 / 82 / 107 / 138 / 177 / 226）
+const XP_BASE = 22;
+let xpToNext = XP_BASE;
 let choiceCount = 3;
 let gameTime = 0;
 let difficulty = 1;
@@ -892,12 +1002,10 @@ let bossKills = 0;   // 已击败 Boss 数（决定世界成长：新怪物 / �
 let dividers = [];   // 世界内的随机分块虚线
 
 let spawnTimer = 1;
-let waveSpawned = 0;
-let waveSize = 5;
+let waveT = 0;              // 本波已进行的时长（V1.18 起波次由计时驱动）
 
 let upgrades = []; // 当前待选的升级
 let bossRewardOptions = [];
-let bossRewardPicked = 0;
 let keys = {};
 let damageNumbers = [];
 let shake = 0;
@@ -1424,14 +1532,16 @@ function addSummon(type) {
 }
 function hasSummon(type) { return summons.some(s => s.type === type); }
 function getSummon(type) { return summons.find(s => s.type === type); }
-// 是否拥有元素伤害来源（火球 / 雷电 / 冰刺 / 带点燃的宠物）
+// 是否拥有元素伤害来源（雷电 / 带点燃的宠物）
 function hasElementalSource() {
-  return hasSummon('fireball') || hasSummon('lightning') || hasSummon('ice') || !!pet;
+  return hasSummon('lightning') || !!pet;
 }
 // 局内能力（元素类 / 召唤物）伤害：升级卡走「加算区」，进化走「独立乘区」，
-// 最终折算成 dmgMul；元素类只吃元素伤害，召唤物只吃召唤物伤害
+// 最终折算成 dmgMul；元素类只吃元素伤害，召唤物只吃召唤物伤害。
+// 独立乘区只做纯乘、不带下限（下限统一留在 stats.elementalDamage / summonDamage 的加算区那层），
+// 否则数量卡叠到 0.9ⁿ 触底后惩罚会失效，进化乘区也会被一起截断。
 function refreshSummonMul(s) {
-  s.dmgMul = Math.max(DMG_FLOOR, (1 + (s.dmgAdd || 0)) * (s.dmgMore || 1));
+  s.dmgMul = (1 + (s.dmgAdd || 0)) * (s.dmgMore || 1);
 }
 function powerBaseDamage(s) {
   return s.cls === 'ele' ? stats.elementalDamage : stats.summonDamage;
@@ -1459,182 +1569,230 @@ function buildUpgradePool() {
   pool.push({ id: 'speed', name: '移速 +12%', desc: '部队移动更快', weight: W_LOW, apply() { stats.moveSpeed *= 1.12; } });
   pool.push({ id: 'hp', name: '生命上限 +20%', desc: '小兵更抗打（血池上限同步提升）', weight: W_MED, apply() { stats.maxHp *= 1.2; const before = squadMaxHp; refreshSquadPool(); squadHp += Math.max(0, squadMaxHp - before); } });
   pool.push({ id: 'heal', name: '医疗包', desc: '全队回复 40% 生命', weight: W_LOW, apply() { healAll(CFG.healAmount); } });
-  pool.push({ id: 'add', name: '增援 +1（子弹加成 -10%）', desc: '新增一名小兵，子弹加成 -10%（同类相加）', weight: 0.8, apply() { addSoldier(); addDamageBonus('bullet', -0.1); } });
+  if (canPick('add', 4)) {
+    pool.push({ id: 'add', name: '增援 +1（子弹加成 -10%）', desc: '新增一名小兵，子弹加成 -10%（同类相加，最多 4 次）', weight: 0.8, apply() { markPick('add'); addSoldier(); addDamageBonus('bullet', -0.1); } });
+  }
   pool.push({ id: 'pickup', name: '拾取范围 +30%', desc: '经验光球磁吸更远', weight: W_NORM, apply() { stats.pickupRange *= 1.3; } });
   pool.push({ id: 'shield', name: '护盾 +20', desc: '护盾抵挡伤害，破盾 3 秒后恢复', weight: W_NORM, apply() { squad.shieldMax += 20; squad.shield += 20; } });
-  if (stats.invulnDuration < 1.5) {
-    pool.push({ id: 'invuln', name: '受伤免疫 +1s', desc: '受击后 1 秒内免疫伤害', weight: W_NORM, apply() { stats.invulnDuration = Math.min(1.5, stats.invulnDuration + 1); } });
+  if (poolGate(stats.invulnDuration < 1.0)) {
+    pool.push({ id: 'invuln', name: '受伤免疫 +0.5s', desc: '受击后 0.5 秒内免疫伤害（冷却 3s）', weight: W_NORM, apply() { stats.invulnDuration = Math.min(1.0, stats.invulnDuration + 0.5); } });
   }
-  if (choiceCount < 6) {
+  if (poolGate(choiceCount < 6)) {
     pool.push({ id: 'choices', name: '升级选项 +1', desc: '每次升级多 1 个选项（最多 6 个）', weight: 1.1, apply() { choiceCount = Math.min(6, choiceCount + 1); } });
   }
 
   // 特殊选项
-  pool.push({ id: 'power-bullet', name: '强力子弹', desc: '子弹伤害 +30%（同类加成相加），击退 +10%', weight: W_NORM, apply() { addDamageBonus('bullet', 0.3); stats.bulletKnockback = Math.min(1, stats.bulletKnockback + 0.1); } });
+  pool.push({ id: 'power-bullet', name: '强力子弹', desc: '子弹伤害 +30%（同类相加），击退 +10%，射速 -20%', weight: W_NORM, apply() { addDamageBonus('bullet', 0.3); stats.bulletKnockback = Math.min(1, stats.bulletKnockback + 0.1); weapons.forEach(w => w.rateMul = (w.rateMul || 1) * 0.8); } });
   // 元素法师（子弹→元素 转换卡）：走加算区，且每局最多 2 次，避免反复相乘把子弹伤害压没
-  if (hasElementalSource() && canPick('elemental-mage', 2)) {
+  if (poolGate(hasElementalSource()) && canPick('elemental-mage', 2)) {
     pool.push({ id: 'elemental-mage', name: '元素法师', desc: '子弹加成 -30%、元素加成 +20%（同类相加，最多 2 次）', weight: W_NORM, apply() { markPick('elemental-mage'); addDamageBonus('bullet', -0.3); addDamageBonus('ele', 0.2); } });
   }
-  if (stats.dodge < 0.6) {
+  if (poolGate(stats.dodge < 0.6)) {
     pool.push({ id: 'dodge', name: '闪避 +20%', desc: '概率规避伤害（最多 60%）', weight: W_NORM, apply() { stats.dodge = Math.min(0.6, stats.dodge + 0.2); } });
   }
   // 嗜血：易伤与吸血都进各自的「同类加算区」（易伤只在最终伤害上乘一次）
   pool.push({ id: 'bloodthirst', name: '嗜血', desc: '敌人受到的伤害 +20%（易伤，同类相加）；造成伤害的 1% 回复队伍生命', weight: W_MED, apply() { stats.vuln = (stats.vuln || 0) + 0.2; stats.lifesteal = (stats.lifesteal || 0) + 0.01; } });
 
   // 主动技能（时缓需解锁）
-  if (!skills.slow.owned) {
+  if (poolGate(!skills.slow.owned)) {
     pool.push({ id: 'skill-slow', name: '主动技能：时缓', desc: '让所有敌人减速 3 秒（技能位 · 冷却 16s）', weight: 1.4, apply() { skills.slow.owned = true; skills.slow.cd = 0; } });
-  } else {
-    if (skills.slow.duration < 6) {
+  }
+  if (poolGate(skills.slow.owned)) {
+    if (poolGate(skills.slow.duration < 6)) {
       pool.push({ id: 'slow-time', name: '时缓：时长 +1s', desc: '减速持续时间延长', weight: W_NORM, apply() { skills.slow.duration += 1; } });
     }
-    if (skills.slow.cdMax > 8) {
+    if (poolGate(skills.slow.cdMax > 8)) {
       pool.push({ id: 'slow-cd', name: '时缓：冷却 -20%', desc: '技能转得更快', weight: W_NORM, apply() { skills.slow.cdMax = Math.max(8, Math.round(skills.slow.cdMax * 0.8)); } });
     }
   }
 
   // 携带武器：射速 / 弹丸 / 弹速（伤害成长走「强力子弹」，各卡均为无限次）
-  weapons.forEach(w => {
-    const def = WEAPON_DEFS[w.type];
-    pool.push({ id: `${w.type}-rate`, name: `${def.name}：射速 +25%`, desc: '攻击速度提升', weight: W_NORM, route: w.type, apply() { weaponRate(w.type, 1.25); } });
-    // 弹丸 +1 组：多射出一组原弹丸（散弹一次 3 发），代价是子弹伤害 ×0.9（独立乘区，不与其它子弹加成互抵）
-    pool.push({ id: `${w.type}-pellet`, name: `${def.name}：弹丸 +${def.baseCount}`, desc: `每次攻击多射出一组弹丸（${def.baseCount} 发），子弹伤害 ×0.9（独立乘算）`, weight: W_NORM, route: w.type, apply() { getWeapon(w.type).extraCount += def.baseCount; weaponMul(w.type, 0.9); } });
-    pool.push({ id: `${w.type}-bulletSpeed`, name: `${def.name}：弹速 +20%`, desc: '子弹飞得更快，更容易命中移动中的敌人', weight: W_NORM, route: w.type, apply() { const ww = getWeapon(w.type); ww.speedMul = (ww.speedMul || 1) * 1.2; } });
+  // 调试（devForcePool）：把全部武器线都列出来，方便测未携带武器的卡
+  const poolWtypes = devForcePool ? Object.keys(WEAPON_DEFS) : weapons.map(w => w.type);
+  poolWtypes.forEach(wtype => {
+    const def = WEAPON_DEFS[wtype];
+    pool.push({ id: `${wtype}-rate`, name: `${def.name}：射速 +25%`, desc: '攻击速度提升', weight: W_NORM, route: wtype, apply() { weaponRate(wtype, 1.25); } });
+    // 弹丸 +1 组：多射出一组原弹丸（数量 = def.baseCount，如散弹 6 发），代价是子弹伤害 ×0.9（独立乘区，不与其它子弹加成互抵）
+    if (canPick(`${wtype}-pellet`, 4)) {
+      pool.push({ id: `${wtype}-pellet`, name: `${def.name}：弹丸 +${def.baseCount}`, desc: `每次攻击多射出一组弹丸（${def.baseCount} 发），子弹伤害 ×0.9（独立乘算，最多 4 次）`, weight: W_NORM, route: wtype, apply() { markPick(`${wtype}-pellet`); getWeapon(wtype).extraCount += def.baseCount; weaponMul(wtype, 0.9); } });
+    }
+    pool.push({ id: `${wtype}-bulletSpeed`, name: `${def.name}：弹速 +20%`, desc: '子弹飞得更快，更容易命中移动中的敌人', weight: W_NORM, route: wtype, apply() { const ww = getWeapon(wtype); ww.speedMul = (ww.speedMul || 1) * 1.2; } });
   });
 
   // 武器特殊选项
   const wtype = weapons[0] && weapons[0].type;
-  if (wtype === 'rifle') {
-    const w = getWeapon('rifle');
-    if ((w.pierce || 0) < 3) {
-      pool.push({ id: 'rifle-pierce', name: '步枪：穿透 +1', desc: '子弹穿透敌人（最多 3 次）', weight: W_NORM, route: 'rifle', apply() { const w = getWeapon('rifle'); w.pierce = Math.min(3, (w.pierce || 0) + 1); } });
+  const devW = t => poolGate(wtype === t);   // 调试：三条武器专属分支都列出来
+  // 子弹穿透 +1（V1.22）：通用卡，替换掉原来只对步枪 / 狙击枪生效的「武器穿透 +1」。
+  // 代价与「弹丸 +1 组」同一套算法——子弹伤害 ×0.9（独立乘区，不与其它子弹加成互抵），最多 4 次。
+  if (canPick('bullet-pierce', 4)) {
+    pool.push({
+      id: 'bullet-pierce', name: '子弹穿透 +1',
+      desc: '子弹可多穿透 1 名敌人，子弹伤害 ×0.9（独立乘算，最多 4 次）',
+      weight: W_NORM, route: wtype,
+      apply() { markPick('bullet-pierce'); weapons.forEach(w => { w.pierce = (w.pierce || 0) + 1; weaponMul(w.type, 0.9); }); },
+    });
+  }
+  if (devW('shotgun')) {
+    const w = getWeapon('shotgun') || {};
+    if (poolGate((w.splitChance || 0) < 0.3)) {
+      pool.push({ id: 'shotgun-split', name: '散弹：击杀分裂 +10%', desc: '击杀敌人概率分裂 2 枚弹丸（最多 30%）', weight: W_NORM, route: 'shotgun', apply() { const w = getWeapon('shotgun'); if (!w) return; w.splitChance = Math.min(0.3, (w.splitChance || 0) + 0.1); } });
     }
-  } else if (wtype === 'shotgun') {
-    const w = getWeapon('shotgun');
-    if ((w.splitChance || 0) < 0.3) {
-      pool.push({ id: 'shotgun-split', name: '散弹：击杀分裂 +10%', desc: '击杀敌人概率分裂 2 枚弹丸（最多 30%）', weight: W_NORM, route: 'shotgun', apply() { const w = getWeapon('shotgun'); w.splitChance = Math.min(0.3, (w.splitChance || 0) + 0.1); } });
+    if (poolGate((w.spreadMul || 1) > 0.45)) {
+      pool.push({ id: 'shotgun-focus', name: '散弹：散布 -15%', desc: '弹丸更集中，单体命中更高（最多收紧到 45%）', weight: W_NORM, route: 'shotgun', apply() { const w = getWeapon('shotgun'); if (!w) return; w.spreadMul = Math.max(0.45, (w.spreadMul || 1) * 0.85); } });
     }
-    if ((w.spreadMul || 1) > 0.45) {
-      pool.push({ id: 'shotgun-focus', name: '散弹：散布 -15%', desc: '弹丸更集中，单体命中更高（最多收紧到 45%）', weight: W_NORM, route: 'shotgun', apply() { const w = getWeapon('shotgun'); w.spreadMul = Math.max(0.45, (w.spreadMul || 1) * 0.85); } });
-    }
-  } else if (wtype === 'laser') {
+  }
+  if (devW('laser')) {
     // 狂暴：高风险高攻速，全局只出现一次
     if (!appliedIds.has('laser-special')) {
       pool.push({ id: 'laser-special', name: '机枪：狂暴', desc: '射速 +50%、移速 -15%、伤害 -30%（仅一次）', weight: 0.3, route: 'laser', apply() { weaponRate('laser', 1.5); stats.moveSpeed *= 0.85; weaponMul('laser', 0.7); } });
     }
-  } else if (wtype === 'sniper') {
-    const w = getWeapon('sniper');
-    if ((w.pierce || 0) < 4) {
-      pool.push({ id: 'sniper-pierce', name: '狙击枪：穿透 +1', desc: '子弹可多穿透 1 名敌人（最多 4）', weight: W_NORM, route: 'sniper', apply() { const w = getWeapon('sniper'); w.pierce = Math.min(4, (w.pierce || 0) + 1); } });
-    }
-    pool.push({ id: 'sniper-range', name: '狙击枪：射程 +20%', desc: '可以在更远处开火', weight: W_NORM, route: 'sniper', apply() { const w = getWeapon('sniper'); w.rangeMul = (w.rangeMul || 1) * 1.2; } });
+  }
+  if (devW('sniper')) {
+    pool.push({ id: 'sniper-range', name: '狙击枪：射程 +20%', desc: '可以在更远处开火', weight: W_NORM, route: 'sniper', apply() { const w = getWeapon('sniper'); if (!w) return; w.rangeMul = (w.rangeMul || 1) * 1.2; } });
     if (!appliedIds.has('sniper-charge')) {
       pool.push({ id: 'sniper-charge', name: '狙击枪：蓄力弹', desc: '子弹伤害加成 +30%（同类相加），射速 -25%（仅一次）', weight: 0.5, route: 'sniper', apply() { addDamageBonus('bullet', 0.3); weaponRate('sniper', 0.75); } });
     }
   }
 
   // ===== 元素类（走元素伤害，不吃召唤物加成） =====
-  // 火球：命中敌人时触发
-  if (!hasSummon('fireball')) {
-    pool.push({ id: 'unlock-fireball', name: '元素：火球', desc: '命中敌人时召唤火球打最近敌人，带冷却（元素伤害）', weight: 1.2, route: 'fireball', apply() { addSummon('fireball'); } });
-  } else {
-    const fb = getSummon('fireball');
-    pool.push({ id: 'fireball-dmg', name: '火球伤害 +30%', desc: '火球伤害提升（同类相加）', weight: W_NORM, route: 'fireball', apply() { summonMul('fireball', 1.3); } });
-    pool.push({ id: 'fireball-cd', name: '火球冷却 -20%', desc: '召唤火球更频繁', weight: W_NORM, route: 'fireball', apply() { summonRate('fireball', 1.2); } });
-    pool.push({ id: 'fireball-aoe', name: '火球爆炸范围 +20%', desc: '爆炸范围更大', weight: W_NORM, route: 'fireball', apply() { getSummon('fireball').aoeMul = (getSummon('fireball').aoeMul || 1) * 1.2; } });
-    if (!fb.ignite) {
-      pool.push({ id: 'fireball-ignite', name: '火球：点燃', desc: '命中点燃目标，火焰伤害持续 1s', weight: W_NORM, route: 'fireball', apply() { getSummon('fireball').ignite = true; } });
-    } else {
-      // 点燃后才能延长火焰时间
-      pool.push({ id: 'fireball-burnTime', name: '火球：火焰持续时间 +0.5s', desc: '点燃持续时间延长', weight: W_NORM, route: 'fireball', apply() { getSummon('fireball').burnTime += 0.5; } });
-    }
-    pool.push({ id: 'fireball-more', name: '火球数量 +1', desc: '每次多召唤 1 颗火球，火球伤害 ×0.9（独立乘算）', weight: W_NORM, route: 'fireball', apply() { getSummon('fireball').extraCount += 1; summonMore('fireball', 0.9); } });
-    if (!fb.killExplode) {
-      pool.push({ id: 'fireball-killExplode', name: '火球：击杀爆炸', desc: '击杀怪物时爆炸造成范围伤害', weight: W_NORM, route: 'fireball', apply() { getSummon('fireball').killExplode = true; } });
-    } else {
-      // 击杀爆炸后才能强化爆炸
-      pool.push({ id: 'fireball-killRadius', name: '击杀爆炸范围 +25%', desc: '击杀爆炸范围更大', weight: W_NORM, route: 'fireball', apply() { const s = getSummon('fireball'); s.killRadius = Math.round((s.killRadius || 60) * 1.25); } });
-      pool.push({ id: 'fireball-killDmg', name: '击杀爆炸伤害 +30%', desc: '击杀爆炸伤害提升', weight: W_NORM, route: 'fireball', apply() { const s = getSummon('fireball'); s.killDmg = Math.round((s.killDmg || 15) * 1.3); } });
-    }
+  // 火球 / 冰刺已下架（定义与实现保留，后续交给宠物用），当前元素线只有雷电。
+  // 雷电：子弹「开火」时按概率召唤闪电，无冷却；额外闪电走 chainLv（1~4 道，覆盖式）
+  if (poolGate(!hasSummon('lightning'))) {
+    pool.push({ id: 'unlock-lightning', name: '元素：雷电', desc: '子弹开火时 50% 概率召唤闪电攻击 1 名敌人（元素伤害）', weight: 1.2, route: 'lightning', apply() { addSummon('lightning'); } });
   }
-
-  // 雷电：命中敌人时随机劈一名敌人
-  if (!hasSummon('lightning')) {
-    pool.push({ id: 'unlock-lightning', name: '元素：雷电', desc: '命中敌人时召唤雷电随机攻击一名敌人（元素伤害）', weight: 1.2, route: 'lightning', apply() { addSummon('lightning'); } });
-  } else {
+  if (poolGate(hasSummon('lightning'))) {
     pool.push({ id: 'lightning-dmg', name: '雷电伤害 +30%', desc: '雷电伤害提升（同类相加）', weight: W_NORM, route: 'lightning', apply() { summonMul('lightning', 1.3); } });
-    pool.push({ id: 'lightning-cd', name: '雷电冷却 -20%', desc: '召唤雷电更频繁', weight: W_NORM, route: 'lightning', apply() { summonRate('lightning', 1.2); } });
-    pool.push({ id: 'lightning-more', name: '闪电 +1', desc: '每次多劈一道闪电（目标不足时重复劈同一敌人），雷电伤害 ×0.9（独立乘算）', weight: W_NORM, route: 'lightning', apply() { getSummon('lightning').extraCount += 1; summonMore('lightning', 0.9); } });
-    if ((getSummon('lightning').chain || 0) < 3) {
-      pool.push({ id: 'lightning-chain', name: '闪电：链式反应 +1', desc: '闪电延伸至附近敌人（最多 3）', weight: W_NORM, route: 'lightning', apply() { const s = getSummon('lightning'); s.chain = Math.min(3, (s.chain || 0) + 1); } });
+    if (canPick('lightning-chain', 4)) {
+      pool.push({ id: 'lightning-chain', name: '闪电：额外闪电 +1', desc: '额外召唤 1/2/3/4 道闪电，总伤害 -10%/-20%/-30%/-40%；满 4 层触发概率翻倍（100%）', weight: W_NORM, route: 'lightning', apply() { markPick('lightning-chain'); const s = getSummon('lightning'); s.chainLv = Math.min(4, (s.chainLv || 0) + 1); } });
     }
   }
 
-  // 冰刺：定期向附近敌人射出冰刺，造成伤害并霜冻减速
-  if (!hasSummon('ice')) {
-    pool.push({ id: 'unlock-ice', name: '元素：冰刺', desc: '定期向附近敌人射出冰刺，造成伤害并被霜冻减速', weight: 1.2, route: 'ice', apply() { addSummon('ice'); } });
-  } else {
-    const ic = getSummon('ice');
-    pool.push({ id: 'ice-dmg', name: '冰刺伤害 +30%', desc: '冰刺伤害提升（同类相加）', weight: W_NORM, route: 'ice', apply() { summonMul('ice', 1.3); } });
-    pool.push({ id: 'ice-cd', name: '冰刺冷却 -20%', desc: '射出冰刺更频繁', weight: W_NORM, route: 'ice', apply() { summonRate('ice', 1.2); } });
-    pool.push({ id: 'ice-targets', name: '冰刺目标 +1', desc: '多射出一发冰刺（敌人不足时重复命中同一目标），冰刺伤害 ×0.9（独立乘算）', weight: W_NORM, route: 'ice', apply() { getSummon('ice').extraTargets += 1; summonMore('ice', 0.9); } });
-    pool.push({ id: 'ice-slow', name: '冰刺：霜冻更强', desc: '减速幅度更大（移速最低压到 25%）', weight: W_NORM, route: 'ice', apply() { const s = getSummon('ice'); s.slowMul = Math.max(0.45, (s.slowMul || 1) * 0.85); } });
-    pool.push({ id: 'ice-slowTime', name: '冰刺：霜冻 +0.6s', desc: '减速持续时间延长', weight: W_NORM, route: 'ice', apply() { getSummon('ice').slowTime += 0.6; } });
-    pool.push({ id: 'ice-range', name: '冰刺：范围 +20%', desc: '索敌范围更大', weight: W_NORM, route: 'ice', apply() { const s = getSummon('ice'); s.rangeMul = (s.rangeMul || 1) * 1.2; } });
-    if (!ic.freezeChance) {
-      pool.push({ id: 'ice-freeze', name: '冰刺：冰冻', desc: '命中时有 20% 概率把敌人冻成冰块（短暂无法移动）', weight: W_MED, route: 'ice', apply() { getSummon('ice').freezeChance = 0.2; } });
-    } else {
-      if ((ic.freezeChance || 0) < 0.6) {
-        pool.push({ id: 'ice-freezeChance', name: '冰冻：概率 +15%', desc: '冰冻触发概率提升（最多 60%）', weight: W_NORM, route: 'ice', apply() { const s = getSummon('ice'); s.freezeChance = Math.min(0.6, (s.freezeChance || 0) + 0.15); } });
-      }
-      pool.push({ id: 'ice-freezeTime', name: '冰冻：时长 +0.4s', desc: '冰块持续更久', weight: W_NORM, route: 'ice', apply() { const s = getSummon('ice'); s.freezeTime = (s.freezeTime || 1.2) + 0.4; } });
-    }
+  // ===== 子弹附魔与状态（V1.10） =====
+  // 附魔为「子弹命中时 roll 概率」，各 4 层、覆盖式递进；点燃 / 减速 / 冰冻受各自抗性限制
+  const fireLv = cardLv('enchant-fire');
+  if (poolGate(fireLv < 4)) {
+    pool.push({ id: 'enchant-fire', name: '火焰附魔', desc: `子弹命中时 ${Math.round(ENCH_FIRE_CHANCE[fireLv] * 100)}% 概率点燃敌人 ${BURN_TIME}s（最多 4 次）`, weight: W_NORM, apply() { markPick('enchant-fire'); } });
+  }
+  const frostLv = cardLv('enchant-frost');
+  if (poolGate(frostLv < 4)) {
+    pool.push({ id: 'enchant-frost', name: '霜冻附魔', desc: `子弹命中时 ${Math.round(ENCH_FROST_CHANCE[frostLv] * 100)}% 概率减速敌人 ${FROST_TIME}s（最多 4 次）`, weight: W_NORM, apply() { markPick('enchant-frost'); } });
+  }
+  const burnLv = cardLv('burn-boost');
+  if (poolGate(cardLv('enchant-fire') > 0) && poolGate(burnLv < 4)) {
+    pool.push({ id: 'burn-boost', name: '严重灼伤', desc: `点燃伤害 +${Math.round(SEVERE_BURN[burnLv] * 100)}%（最多 4 次，需先选「火焰附魔」）`, weight: W_NORM, apply() { markPick('burn-boost'); stats.burnDamage = SEVERE_BURN[Math.max(0, cardLv('burn-boost') - 1)]; } });
+  }
+  if (poolGate(burnLv > 0) && poolGate(cardLv('blast') < 1)) {
+    pool.push({ id: 'blast', name: '爆裂', desc: `被点燃的敌人死亡时小范围爆炸（伤害 = 其生命上限 ${Math.round(BLAST_HP * 100)}%），被波及的敌人再挂 2 层点燃（仅一次，需先选「严重灼伤」）`, weight: 0.8, apply() { markPick('blast'); } });
+  }
+  const biteLv = cardLv('frostbite');
+  if (poolGate(cardLv('enchant-frost') > 0) && poolGate(biteLv < 4)) {
+    pool.push({ id: 'frostbite', name: '冻伤', desc: `被减速的敌人 ${Math.round(FROSTBITE_CHANCE[biteLv] * 100)}% 概率被冰冻 ${FREEZE_TIME}s，并立即扣除当前生命的 ${Math.round(FROSTBITE_HP[biteLv] * 100)}%（精英 5% / Boss 1%；需先选「霜冻附魔」）`, weight: W_NORM, apply() { markPick('frostbite'); } });
+  }
+  if (poolGate(biteLv > 0) && poolGate(cardLv('winter') < 1)) {
+    pool.push({ id: 'winter', name: '凛冬', desc: `被冰冻的敌人阵亡后造成小范围冰冻爆炸，伤害 = 其生命上限 ${Math.round(WINTER_HP * 100)}%（仅一次，需先选「冻伤」）`, weight: 0.8, apply() { markPick('winter'); } });
   }
 
   // ===== 召唤物（走召唤物伤害） =====
   // 镰刀：环绕自身旋转
-  if (!hasSummon('scythe')) {
+  if (poolGate(!hasSummon('scythe'))) {
     pool.push({ id: 'unlock-scythe', name: '召唤：镰刀', desc: '环绕自身旋转，接触造成伤害', weight: 1.2, route: 'scythe', apply() { addSummon('scythe'); } });
-  } else {
-    const sc = getSummon('scythe');
-    pool.push({ id: 'scythe-more', name: '镰刀数量 +1', desc: '多一把环绕的镰刀（额外刀刃只扩大覆盖面，不降低伤害）', weight: W_NORM, route: 'scythe', apply() { getSummon('scythe').extraCount += 1; } });
+  }
+  if (poolGate(hasSummon('scythe'))) {
+    const sc = getSummon('scythe') || {};
+    if (canPick('scythe-more', 4)) {
+      pool.push({ id: 'scythe-more', name: '镰刀数量 +1', desc: '多一把环绕的镰刀（额外刀刃只扩大覆盖面，不降低伤害，最多 4 次）', weight: W_NORM, route: 'scythe', apply() { markPick('scythe-more'); getSummon('scythe').extraCount += 1; } });
+    }
     pool.push({ id: 'scythe-speed', name: '镰刀飞行速度 +20%', desc: '镰刀转得更快', weight: W_NORM, route: 'scythe', apply() { summonRate('scythe', 1.2); } });
     pool.push({ id: 'scythe-dmg', name: '镰刀伤害 +30%', desc: '镰刀伤害提升（同类相加）', weight: W_NORM, route: 'scythe', apply() { summonMul('scythe', 1.3); } });
     pool.push({ id: 'scythe-size', name: '镰刀变大', desc: '刀刃体积与判定 +30%（环半径不变，更容易扫到贴身敌人）', weight: W_NORM, route: 'scythe', apply() { getSummon('scythe').sizeMul = (getSummon('scythe').sizeMul || 1) * 1.3; } });
-    if ((sc.lifesteal || 0) < 0.20) {
+    if (poolGate((sc.lifesteal || 0) < 0.20)) {
       pool.push({ id: 'scythe-leech', name: '镰刀：饮血 +10%', desc: '镰刀造成伤害的 10% 回复队伍生命（最多叠 2 次）', weight: W_NORM, route: 'scythe', apply() { const s = getSummon('scythe'); s.lifesteal = Math.min(0.20, (s.lifesteal || 0) + 0.10); } });
     }
     // 阻挡子弹为递进升级：先 +15%，之后才出现 +20%（最高 45%）
-    if ((sc.blockChance || 0.10) < 0.25) {
+    if (poolGate((sc.blockChance || 0.10) < 0.25)) {
       pool.push({ id: 'scythe-block1', name: '镰刀阻挡子弹 +15%', desc: '概率挡掉敌方子弹', weight: W_NORM, route: 'scythe', apply() { const s = getSummon('scythe'); s.blockChance = Math.min(0.45, (s.blockChance || 0.10) + 0.15); } });
-    } else if ((sc.blockChance || 0.10) < 0.45) {
+    }
+    if (poolGate((sc.blockChance || 0.10) >= 0.25 && (sc.blockChance || 0.10) < 0.45)) {
       pool.push({ id: 'scythe-block2', name: '镰刀阻挡子弹 +20%', desc: '进一步概率挡掉敌方子弹', weight: W_NORM, route: 'scythe', apply() { const s = getSummon('scythe'); s.blockChance = Math.min(0.45, (s.blockChance || 0.10) + 0.20); } });
     }
     pool.push({ id: 'scythe-knockback', name: '镰刀：击退', desc: '命中击退敌人', weight: W_NORM, route: 'scythe', apply() { getSummon('scythe').knockback = true; } });
+
+    // 质变链（V1.22）：割裂 → 噬魂 → 死神降临（结构与附魔线一致：基础 4 层 → 进阶 4 层 → 一次性大招）
+    const bleed = cardLv('scythe-bleed');
+    if (poolGate(bleed < 4)) {
+      pool.push({
+        id: 'scythe-bleed', name: '镰刀：割裂',
+        desc: `镰刀命中时 ${Math.round(SCYTHE_BLEED_CHANCE[bleed] * 100)}% 概率使敌人割裂 ${BLEED_TIME}s，割裂期间每秒受到镰刀单次伤害的 ${Math.round(SCYTHE_BLEED_PCT[bleed] * 100)}%（最多 4 次）`,
+        weight: W_NORM, route: 'scythe', apply() { markPick('scythe-bleed'); },
+      });
+    }
+    const reap = cardLv('scythe-reap');
+    if (poolGate(bleed > 0) && poolGate(reap < 4)) {
+      pool.push({
+        id: 'scythe-reap', name: '镰刀：噬魂',
+        desc: `对已被割裂的敌人伤害 +${Math.round(SCYTHE_REAP_DMG[reap] * 100)}%，并把该次伤害的 ${Math.round(SCYTHE_REAP_LEECH[reap] * 100)}% 转化为队伍生命（最多 4 次，需先选「割裂」）`,
+        weight: W_NORM, route: 'scythe', apply() { markPick('scythe-reap'); },
+      });
+    }
+    if (poolGate(reap > 0) && poolGate(cardLv('scythe-execute') < 1)) {
+      pool.push({
+        id: 'scythe-execute', name: '镰刀：死神降临',
+        desc: `被割裂的敌人生命低于 ${Math.round(EXECUTE_HP * 100)}% 时，镰刀掠过直接处决；精英 / Boss 改为额外受到生命上限 ${Math.round(EXECUTE_HEAVY_HP * 100)}% 的伤害（同一敌人 ${EXECUTE_CD}s 一次，仅一次，需先选「噬魂」）`,
+        weight: 0.8, route: 'scythe', apply() { markPick('scythe-execute'); },
+      });
+    }
   }
 
   // 飞剑：常驻实体，在视野内的敌人之间穿梭斩击，无敌人时剑尖朝下绕角色环绕
-  if (!hasSummon('sword')) {
+  if (poolGate(!hasSummon('sword'))) {
     pool.push({ id: 'unlock-sword', name: '召唤：飞剑', desc: '召唤一柄飞剑在敌人之间穿梭贯穿；视野内没有敌人时剑尖朝下绕你环绕', weight: 1.2, route: 'sword', apply() { addSummon('sword'); } });
-  } else {
-    const sw = getSummon('sword');
+  }
+  if (poolGate(hasSummon('sword'))) {
+    const sw = getSummon('sword') || {};
     pool.push({ id: 'sword-dmg', name: '飞剑伤害 +30%', desc: '飞剑伤害提升（同类相加）', weight: W_NORM, route: 'sword', apply() { summonMul('sword', 1.3); } });
     pool.push({ id: 'sword-cd', name: '飞剑攻速 +20%', desc: '穿梭斩击更频繁', weight: W_NORM, route: 'sword', apply() { summonRate('sword', 1.2); } });
-    pool.push({ id: 'sword-more', name: '飞剑 +1', desc: '多一柄飞剑同时穿梭，飞剑伤害 ×0.9（独立乘算）', weight: W_NORM, route: 'sword', apply() { getSummon('sword').extraCount += 1; summonMore('sword', 0.9); } });
+    if (canPick('sword-more', 4)) {
+      pool.push({ id: 'sword-more', name: '飞剑 +1', desc: '多一柄飞剑同时穿梭，飞剑伤害 ×0.9（独立乘算，最多 4 次）', weight: W_NORM, route: 'sword', apply() { markPick('sword-more'); getSummon('sword').extraCount += 1; summonMore('sword', 0.9); } });
+    }
     pool.push({ id: 'sword-range', name: '飞剑：索敌范围 +20%', desc: '视野更远，敌人一进视野就出剑', weight: W_NORM, route: 'sword', apply() { const s = getSummon('sword'); s.rangeMul = (s.rangeMul || 1) * 1.2; } });
     pool.push({ id: 'sword-speed', name: '飞剑：飞行速度 +20%', desc: '飞剑穿梭得更快', weight: W_NORM, route: 'sword', apply() { const s = getSummon('sword'); s.speedMul = (s.speedMul || 1) * 1.2; } });
-    if ((sw.pierce || 0) < 2) {
+    if (poolGate((sw.pierce || 0) < 2)) {
       pool.push({ id: 'sword-pierce', name: '飞剑：连斩 +1', desc: '斩击时额外波及命中点附近的敌人（最多 2）', weight: W_NORM, route: 'sword', apply() { const s = getSummon('sword'); s.pierce = Math.min(2, (s.pierce || 0) + 1); } });
     }
-    if (!sw.giant) {                         // 巨剑术：整条线只能拿一次
+    if (poolGate(!sw.giant)) {               // 巨剑术：整条线只能拿一次
       pool.push({ id: 'sword-giant', name: '巨剑术', desc: '飞剑体型 +50%、伤害 +30%；剑身变长变宽，碰到它的敌人都会受伤（仅此一张）', weight: 0.8, route: 'sword', apply() { const s = getSummon('sword'); s.giant = true; s.sizeMul = 1.5; summonMul('sword', 1.3); } });
+    }
+
+    // 质变链（V1.22）：剑印 → 剑气 → 剑冢（结构与附魔线一致：基础 4 层 → 进阶 4 层 → 一次性大招）
+    const mark = cardLv('sword-mark');
+    if (poolGate(mark < 4)) {
+      pool.push({
+        id: 'sword-mark', name: '飞剑：剑印',
+        desc: `飞剑命中时 ${Math.round(SWORD_MARK_CHANCE[mark] * 100)}% 概率留下剑印 ${SWORD_MARK_TIME}s，被剑印标记的敌人受到的伤害 +${Math.round(SWORD_MARK_VULN[mark] * 100)}%（与「嗜血」同类相加，最多 4 次）`,
+        weight: W_NORM, route: 'sword', apply() { markPick('sword-mark'); },
+      });
+    }
+    const qi = cardLv('sword-qi');
+    if (poolGate(mark > 0) && poolGate(qi < 4)) {
+      pool.push({
+        id: 'sword-qi', name: '飞剑：剑气',
+        desc: `飞剑命中时向四周溅射剑气，对 ${SWORD_QI_RADIUS}px 内最多 4 名其他敌人造成本次斩击伤害的 ${Math.round(SWORD_QI_PCT[qi] * 100)}%（最多 4 次，需先选「剑印」）`,
+        weight: W_NORM, route: 'sword', apply() { markPick('sword-qi'); },
+      });
+    }
+    if (poolGate(qi > 0) && poolGate(cardLv('sword-tomb') < 1)) {
+      pool.push({
+        id: 'sword-tomb', name: '飞剑：剑冢',
+        desc: `带剑印的敌人阵亡时原地落下幻影剑，对 ${TOMB_RADIUS}px 内敌人造成其生命上限 ${Math.round(TOMB_HP * 100)}% 的伤害并重新挂上剑印（仅一次，需先选「剑气」）`,
+        weight: 0.8, route: 'sword', apply() { markPick('sword-tomb'); },
+      });
     }
   }
 
   // 宠物（唯一，若选择）
   if (pet) {
     const pd = PET_DEFS[pet.type];
-    pool.push({ id: 'pet-dmg', name: `${pd.name}伤害 +30%`, desc: `${pd.name}伤害提升（同类相加）`, weight: W_NORM, apply() { pet.dmgAdd = (pet.dmgAdd || 0) + 0.3; pet.dmgMul = (pet.baseMul || 1) * Math.max(DMG_FLOOR, 1 + pet.dmgAdd); } });
+    pool.push({ id: 'pet-dmg', name: `${pd.name}伤害 +30%`, desc: `${pd.name}伤害提升（同类相加）`, weight: W_NORM, apply() { pet.dmgAdd = (pet.dmgAdd || 0) + 0.3; pet.dmgMul = (pet.baseMul || 1) * (1 + pet.dmgAdd); } });
     pool.push({ id: 'pet-speed', name: `${pd.name}攻速 +20%`, desc: `${pd.name}攻击更快`, weight: W_NORM, apply() { pet.rateMul *= 1.2; } });
   }
 
@@ -1642,8 +1800,8 @@ function buildUpgradePool() {
   EVOLUTIONS.forEach(ev => {
     if (appliedIds.has(ev.id)) return;
     const need = ev.need || 3;
-    if ((routePicks[ev.route] || 0) < need) return;
-    if (!ev.req()) return;
+    if (!poolGate((routePicks[ev.route] || 0) >= need)) return;
+    if (!poolGate(ev.req())) return;
     pool.push({ id: ev.id, name: ev.name, desc: `${ev.desc}（本路线强化需满 ${need} 次）`, weight: ev.weight || 0.8, evo: true, apply: ev.apply });
   });
 
@@ -1703,7 +1861,9 @@ function initDecorations() {
   decorations = [];
   terrainCache = null;
   const types = ['grass', 'grass', 'grass', 'rock', 'rock', 'flower'];
-  for (let i = 0; i < 90; i++) {
+  // 数量随世界面积同步（V1.10 地图扩大后保持原有植被密度）
+  const count = Math.round(90 * AREA_SCALE);
+  for (let i = 0; i < count; i++) {
     decorations.push({ x: Math.random() * WORLD.w, y: Math.random() * WORLD.h, type: types[Math.floor(Math.random() * types.length)] });
   }
 }
@@ -1712,8 +1872,10 @@ function initDecorations() {
 function initObstacles() {
   obstacles = [];
   const kinds = ['barrel', 'barrel', 'barrel', 'crate', 'crate', 'pillar', 'pillar'];
+  // 数量与尝试次数都随面积等比（V1.10 地图扩大后保持原有掩体密度）
+  const target = Math.round(18 * AREA_SCALE);
   let guard = 0;
-  while (obstacles.length < 18 && guard++ < 400) {
+  while (obstacles.length < target && guard++ < target * 30) {
     const type = kinds[Math.floor(Math.random() * kinds.length)];
     const def = OBSTACLE_DEFS[type];
     const x = 60 + Math.random() * (WORLD.w - 120);
@@ -1724,19 +1886,20 @@ function initObstacles() {
   }
 }
 
-function damageObstacle(o, dmg) {
+function damageObstacle(o, dmg, crushed) {
   o.hitT = 0.15;
   spawnParticles(o.x, o.y, OBSTACLE_DEFS[o.type].color, 3);
-  if (!isFinite(o.hp)) return;                                            // 石柱 / 树木不可破坏
+  if (!crushed && !isFinite(o.hp)) return;                                // 石柱 / 树木不可破坏（首领碾压走 crushed）
   o.hp -= dmg;
-  if (o.hp <= 0) {
-    o.dead = true;
-    const def = OBSTACLE_DEFS[o.type];
+  if (!crushed && o.hp > 0) return;
+  o.dead = true;
+  const def = OBSTACLE_DEFS[o.type];
+  if (!crushed) {                                                         // 首领碾碎的残骸不给奖励：金币与经验都不掉
     runCoins += def.coin;
-    drops.push({ x: o.x, y: o.y, r: 6, value: def.xp });
-    spawnParticles(o.x, o.y, def.color, 14);
-    sfxKill();
+    if (def.xp > 0) drops.push({ x: o.x, y: o.y, r: 6, value: def.xp });
   }
+  spawnParticles(o.x, o.y, def.color, 14);
+  sfxKill();
 }
 
 // 障碍物阻挡：把圆形单位（玩家 / 小兵 / 敌人）从木桶 · 箱子 · 石柱 · 树木里推出来
@@ -1764,21 +1927,95 @@ function resolveObstacleCollision(ent, radius) {
   }
 }
 
-function resolveEnemyCollisions() {
+// 首领碾压（V1.20）：首领体型大、走位由 AI 驱动，一旦抵住木桶 / 箱子 / 石柱就只能靠冲刺脱身，
+// 所以让它在接触时直接碾碎这些「建筑」。树木特殊——不碾碎，改为**加速苏醒**：同样要读条，
+// 只是按 bossAggroMul 倍速积累（3.5 倍 → 约 1s 苏醒；无小兵在旁时被自然消退拖到约 1.2s），撞完变树怪，首领自然脱身。
+// 必须在 resolveEnemyCollisions() 的推出之前判定：否则首领先被推开，这一帧就不再接触了。
+function crushObstaclesByBosses(dt) {
   for (const e of enemies) {
-    if (e.dead) continue;
-    resolveObstacleCollision(e, e.r);
+    if (e.dead || e.type !== 'boss') continue;
+    for (const o of obstacles) {
+      if (o.dead) continue;
+      const or = o.type === 'tree' ? ((o.grow || 0) < 1 ? 0 : o.r) : o.r;   // 没长成的树不挡路，也不被撞醒
+      if (or <= 0) continue;
+      if (Math.hypot(e.x - o.x, e.y - o.y) >= e.r + or) continue;
+      if (o.type === 'tree') o.aggro = (o.aggro || 0) + dt * FLORA_CFG.tree.bossAggroMul;
+      else damageObstacle(o, 0, true);                                     // crushed：无视血量直接摧毁，且不给金币与经验
+    }
   }
+}
+
+// 敌人之间的碰撞体积：互不重叠。
+// 首领不被小怪推动（否则冲刺轨迹会被一堆小怪挤歪），其余按半径反比分配推开量（体型越大被推得越少）。
+function separateEnemies() {
+  for (let i = 0; i < enemies.length; i++) {
+    const a = enemies[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < enemies.length; j++) {
+      const b = enemies[j];
+      if (b.dead) continue;
+      let dx = b.x - a.x, dy = b.y - a.y;
+      const minD = a.r + b.r;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= minD * minD) continue;
+      let d = Math.sqrt(d2);
+      if (d < 0.001) { dx = 1; dy = 0; d = 1; }          // 完全重合：沿 +x 随便推开
+      const ux = dx / d, uy = dy / d;
+      const aBoss = a.type === 'boss', bBoss = b.type === 'boss';
+      const wa = (aBoss && bBoss) ? b.r / minD : aBoss ? 0 : bBoss ? 1 : b.r / minD;
+      const push = minD - d;
+      a.x -= ux * push * wa;          a.y -= uy * push * wa;
+      b.x += ux * push * (1 - wa);    b.y += uy * push * (1 - wa);
+    }
+  }
+}
+
+// 敌人不能与小兵（玩家）重叠：把敌人逐个推出小兵的碰撞圈。
+// 分离正好把它停在「相切」，所以接触伤害的判定要多留 CONTACT_PAD 的余量（见 updateEnemies）。
+const CONTACT_PAD = 6;
+function separateEnemiesFromSquad() {
+  for (const e of enemies) {
+    if (e.dead || e.devStatic) continue;                              // 调试：站桩敌人也不被玩家推开
+    for (const s of soldiers) {
+      const dx = e.x - s.x, dy = e.y - s.y;
+      const minD = e.r + S.soldierR;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= minD * minD) continue;
+      const d = Math.sqrt(d2);
+      if (d < 0.001) { e.x = s.x + minD; e.y = s.y; continue; }   // 完全重合：沿 +x 推开
+      e.x = s.x + (dx / d) * minD;
+      e.y = s.y + (dy / d) * minD;
+    }
+  }
+}
+
+function resolveEnemyCollisions() {
+  const solveObstacles = () => {
+    for (const e of enemies) {
+      if (e.dead || e.devStatic) continue;      // 调试：站桩敌人不被障碍物推动，保证待在放下的位置
+      resolveObstacleCollision(e, e.r);
+    }
+  };
+  solveObstacles();
+  // 「敌人互推」与「推出玩家圈」交替迭代：两者会互相破坏对方的结果（小兵把敌人压成一层壳、
+  // 壳上装不下就得往外挤），各跑各的收敛不彻底，交替投影能把密集堆叠理得更干净。
+  for (let pass = 0; pass < 2; pass++) {
+    separateEnemies();
+    separateEnemiesFromSquad();
+  }
+  // 收尾再解一次障碍物：上面的推挤可能把敌人挤进树木 / 石柱里（穿障比轻微重叠更显眼）
+  solveObstacles();
 }
 
 // 世界变化：Boss 被击败后，地图上长出树木与藤蔓（有总量上限，避免过密）
 function spawnFlora(treeCount, vineCount) {
   const c = FLORA_CFG.vine;
-  const treeCap = 36, vineCap = 20;
+  // 上限随世界面积等比（V1.10 地图扩大后保持原有植物密度）
+  const treeCap = Math.round(36 * AREA_SCALE), vineCap = Math.round(20 * AREA_SCALE);
   treeCount = Math.min(treeCount, Math.max(0, treeCap - obstacles.filter(o => o.type === 'tree').length));
   vineCount = Math.min(vineCount, Math.max(0, vineCap - vines.length));
   let guard = 0, added = 0;
-  while (added < treeCount && guard++ < 400) {
+  while (added < treeCount && guard++ < 1200) {
     const p = floraSpot(170, 400);                                             // 多数长在视野附近，便于看到生长过程
     if (Math.hypot(p.x - squad.x, p.y - squad.y) < 150) continue;              // 不在玩家脚下生成
     if (obstacles.some(o => Math.hypot(o.x - p.x, o.y - p.y) < o.r + FLORA_CFG.tree.r + 50)) continue;
@@ -1788,7 +2025,7 @@ function spawnFlora(treeCount, vineCount) {
     added++;
   }
   guard = 0; added = 0;
-  while (added < vineCount && guard++ < 400) {
+  while (added < vineCount && guard++ < 1200) {
     const p = floraSpot(250, 460);
     if (Math.hypot(p.x - squad.x, p.y - squad.y) < 220) continue;              // 与玩家保持安全距离
     if (vines.some(v => Math.hypot(v.x - p.x, v.y - p.y) < 150)) continue;
@@ -1833,13 +2070,13 @@ function snapshotRun() {
     enemies: enemies.map(e => Object.assign({}, e, { skillHit: null })),
     bullets: bullets.map(b => Object.assign({}, b, { hit: null, target: null })),
     enemyBullets, drops, obstacles, vines,
-    stats, camera, skills,
-    dmgBonus, dmgBase, eleRateBonus, pickCount,
+    stats, camera, skills, bossArena,
+    dmgBonus, dmgBase, pickCount,
     appliedIds: [...appliedIds],
     routePicks,
     squadRootedT, enemySlowT, squadHp, squadMaxHp,
     wave, kills, runCoins, level, xp, xpToNext, choiceCount, gameTime,
-    difficulty, bossKills, spawnTimer, waveSpawned, waveSize,
+    difficulty, bossKills, spawnTimer, waveT,
     dividers, decorations,
   };
 }
@@ -1872,16 +2109,27 @@ function restoreRun(s) {
     stats.lifesteal = stats.lifesteal || 0;
     stats.regen = stats.regen || 0;
     stats.bloodOrb = stats.bloodOrb || 0;
+    stats.burnDamage = stats.burnDamage || 0;
+    stats.statusDuration = stats.statusDuration || 1;
     camera = s.camera || { x: 0, y: 0 };
+    bossArena = s.bossArena || null;      // 首领战途中存档：场地封锁一并恢复
     skills = s.skills;
     if (s.dmgBonus) {
       dmgBonus = s.dmgBonus;
+      // 旧版「子弹 +50%（元素归零）」把元素加算区写成 -1，改成对称的 -30% 后把这类旧值抬回来，
+      // 否则该存档的元素线会被永久压在 0
+      if (dmgBonus.ele <= -1) dmgBonus.ele = -0.3;
       dmgBase = s.dmgBase || dmgBase;
-      eleRateBonus = s.eleRateBonus || 0;
       pickCount = s.pickCount || {};
       recalcDamage();                       // 乘区与 stats 保持一致
     }
     appliedIds = new Set(s.appliedIds || []);
+    // 旧版 Boss 卡的 id 迁移：旧 id 直接映射到新 id，避免同名奖励被重复获取
+    if (appliedIds.delete('buff-bullet50-ele0')) appliedIds.add('buff-might');       // 子弹 +50% / 元素归零
+    if (appliedIds.delete('buff-ele100')) appliedIds.add('buff-ele-affinity');       // 旧「元素 +100%」
+    if (appliedIds.delete('buff-bullet-mastery')) appliedIds.add('buff-might');      // 实弹专精 → 力量权柄
+    if (appliedIds.delete('buff-ele-mastery')) appliedIds.add('buff-ele-affinity');  // 元素专精 → 元素亲和
+    if (appliedIds.delete('buff-reload100')) appliedIds.add('buff-rage');            // 射速 +100% → 狂暴
     routePicks = s.routePicks || {};
     squadRootedT = s.squadRootedT || 0;
     enemySlowT = s.enemySlowT || 0;
@@ -1890,19 +2138,19 @@ function restoreRun(s) {
     if (squadMaxHp <= 0) refreshSquadPool();          // 兼容旧快照
     if (!(squadHp > 0)) squadHp = squadMaxHp;
     if (!squad.invulnT) squad.invulnT = 0;
+    if (!squad.invulnCdT) squad.invulnCdT = 0;
     wave = s.wave || 1;
     kills = s.kills || 0;
     runCoins = s.runCoins || 0;
     level = s.level || 1;
     xp = s.xp || 0;
-    xpToNext = s.xpToNext || 15;
+    xpToNext = s.xpToNext || XP_BASE;
     choiceCount = s.choiceCount || 3;
     gameTime = s.gameTime || 0;
     difficulty = s.difficulty || 1;
     bossKills = s.bossKills || 0;
     spawnTimer = s.spawnTimer || 1;
-    waveSpawned = s.waveSpawned || 0;
-    waveSize = s.waveSize || 5;
+    waveT = s.waveT || 0;
     dividers = s.dividers || [];
     decorations = s.decorations || [];
     terrainCache = null;
@@ -1911,6 +2159,9 @@ function restoreRun(s) {
     iceSpikes = [];
     blasts = [];
     swordSlashes = [];
+    pendingLightning = [];
+    lightningCdT = 0;
+    lightningPending = false;
     hitStop = 0;
     banner = { text: '', t: 0 };
 
@@ -1923,8 +2174,11 @@ function restoreRun(s) {
       if (!def) return;
       if (!s.cls) s.cls = def.cls;
       Object.entries(def.init || {}).forEach(([k, v]) => { if (s[k] === undefined) s[k] = v; });
-      if (s.dmgMul === undefined) refreshSummonMul(s);
+      // 旧版雷电用 chain（链式反应，最多 3）描述额外闪电，迁移到新的 chainLv（1~4 道）
+      if (s.type === 'lightning' && s.chain !== undefined && !s.chainLv) s.chainLv = Math.min(4, s.chain);
+      refreshSummonMul(s);          // 旧快照的 dmgMul 里带着旧下限，统一重算
     });
+    if (pet && pet.baseMul) pet.dmgMul = pet.baseMul * (1 + (pet.dmgAdd || 0));   // 同上
     obstacles.forEach(o => {
       if (o.type === 'pillar' || o.type === 'tree') { o.hp = Infinity; o.maxHp = Infinity; }
     });
@@ -1951,7 +2205,7 @@ function continueRun() {
 }
 
 function reset() {
-  squad = { x: WORLD.w / 2, y: WORLD.h / 2, tx: WORLD.w / 2, ty: WORLD.h / 2, moving: false, shield: 0, shieldMax: 0, shieldRegenTimer: 0, invulnT: 0 };
+  squad = { x: WORLD.w / 2, y: WORLD.h / 2, tx: WORLD.w / 2, ty: WORLD.h / 2, moving: false, shield: 0, shieldMax: 0, shieldRegenTimer: 0, invulnT: 0, invulnCdT: 0 };
   soldiers = [];
   squadHp = 0;
   squadMaxHp = 0;
@@ -1967,6 +2221,9 @@ function reset() {
   iceSpikes = [];
   blasts = [];
   swordSlashes = [];
+  pendingLightning = [];
+  lightningCdT = 0;
+  lightningPending = false;
   hitStop = 0;
   obstacles = [];
   vines = [];
@@ -1974,29 +2231,31 @@ function reset() {
   stats = {
     moveSpeed: 1, maxHp: 1,
     bulletDamage: 1, elementalDamage: 1, summonDamage: 1, petDamage: 1,
-    pickupRange: 1, invulnDuration: 0, damageTaken: 1, dodge: 0, bulletKnockback: 0, elementalCd: 1,
+    pickupRange: 1, invulnDuration: 0, damageTaken: 1, dodge: 0, bulletKnockback: 0,
+    burnDamage: 0,
+    statusDuration: 1,
     vuln: 0, lifesteal: 0, regen: 0, bloodOrb: 0,
   };
   camera = { x: 0, y: 0 };
+  bossArena = null;
   wave = 1;
   kills = 0;
   runCoins = 0;
   level = 1;
   xp = 0;
-  xpToNext = 15;
+  xpToNext = XP_BASE;
   choiceCount = 3;
   gameTime = 0;
   difficulty = 1;
   bossKills = 0;
   spawnTimer = 1;
-  waveSpawned = 0;
-  waveSize = 5;
+  waveT = 0;
+  devResetTransient();     // 调试：新对局把「无敌 / 秒杀 / 冻结波次 / 速度」恢复默认，避免带进正常游玩
 
   // 应用局外装备（伤害加成 / 受伤减免）
   const eq = EQUIPMENT_DEFS[meta.equipped.equipment] || EQUIPMENT_DEFS.none;
   dmgBonus = { bullet: 0, ele: 0, summon: 0, pet: 0 };
   dmgBase = { bullet: eq.damageDealt, ele: 1, summon: 1, pet: 1 };
-  eleRateBonus = 0;
   pickCount = {};
   recalcDamage();
   stats.damageTaken = eq.damageTaken;
@@ -2041,14 +2300,55 @@ function reset() {
 }
 
 // ==================== 输入 ====================
+// 输入框（登录 / 注册 / 开发者口令）里不拦截快捷键，否则输密码时会误触暂停、选卡等
+function isTypingTarget(t) {
+  if (!t || !t.tagName) return false;
+  const tag = t.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable === true;
+}
+
+// 键盘快捷键。返回 true 表示这次按键被快捷键消费掉。
+//   卡牌面板（升级 / 首领奖励）：1~6 直接选第 N 张；升级面板另有 R 重掷
+//   对局中：Esc / P 暂停、Q 时缓
+//   暂停中：Esc / P / 回车 / 空格 继续
+//   结算中：R / 回车 再来一局
+function handleHotkey(e) {
+  const k = e.key.toLowerCase();
+  // 开发者模式：` / F1 开关局内调试面板（对局内外都可以切，方便快速对照）
+  if (devModeOn() && (k === '`' || k === 'f1')) { toggleDevHud(); return true; }
+  if (state === 'upgrade' || state === 'bossreward') {
+    const idx = '123456'.indexOf(e.key);
+    if (idx >= 0) {
+      if (state === 'upgrade') {
+        if (upgrades[idx]) applyUpgrade(upgrades[idx].id);
+      } else if (bossRewardOptions[idx]) {
+        pickBossReward(bossRewardOptions[idx]);
+      }
+      return true;   // 超出卡数也吃掉按键，避免落回移动键
+    }
+    if (k === 'r' && state === 'upgrade') { rerollUpgrades(); return true; }
+    return false;
+  }
+  if (state === 'paused') {
+    if (k === 'escape' || k === 'p' || k === 'enter' || k === ' ') { resumeGame(); return true; }
+    return false;
+  }
+  if (state === 'gameover') {
+    if (k === 'r' || k === 'enter') { startGame(); return true; }
+    return false;
+  }
+  if (state === 'playing') {
+    if (k === 'escape' || k === 'p') { pauseGame(); return true; }
+    if (k === 'q') { useSkill('slow'); return true; }
+  }
+  return false;
+}
+
 window.addEventListener('keydown', e => {
   keys[e.key.toLowerCase()] = true;
   initAudio();
-  if (e.key === 'Escape' || e.key.toLowerCase() === 'p') {
-    if (state === 'playing') pauseGame();
-    else if (state === 'paused') resumeGame();
-  }
-  if (e.key.toLowerCase() === 'q') useSkill('slow');
+  if (isTypingTarget(e.target)) return;
+  if (handleHotkey(e)) e.preventDefault();
 });
 window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
@@ -2083,8 +2383,8 @@ canvas.addEventListener('pointercancel', () => { joystick.active = false; });
 
 // ==================== 更新逻辑 ====================
 function updateCamera() {
-  camera.x = Math.max(0, Math.min(WORLD.w - W, squad.x - W / 2));
-  camera.y = Math.max(0, Math.min(WORLD.h - H, squad.y - H / 2));
+  camera.x = Math.max(0, Math.min(WORLD.w - viewW(), squad.x - viewW() / 2));
+  camera.y = Math.max(0, Math.min(WORLD.h - viewH(), squad.y - viewH() / 2));
 }
 
 function updateSquad(dt) {
@@ -2115,6 +2415,7 @@ function updateSquad(dt) {
   }
 
   resolveObstacleCollision(squad, S.soldierR);   // 木桶 / 箱子 / 石柱 / 树木阻挡
+  clampToBossArena(squad, 0);                    // 首领战中禁止走出竞技场
   squad.x = Math.max(S.soldierR, Math.min(WORLD.w - S.soldierR, squad.x));
   squad.y = Math.max(S.soldierR, Math.min(WORLD.h - S.soldierR, squad.y));
   updateCamera();
@@ -2166,6 +2467,7 @@ function updateSoldiers(dt) {
     resolveObstacleCollision(s, S.soldierR * 0.85);
   });
   if (squad.invulnT > 0) squad.invulnT = Math.max(0, squad.invulnT - dt);
+  if (squad.invulnCdT > 0) squad.invulnCdT = Math.max(0, squad.invulnCdT - dt);
 }
 
 // ==================== 主动技能 ====================
@@ -2204,22 +2506,28 @@ function renderSkillButtons() {
 }
 
 // 武器系统：攻击间隔作为 CD
+// 射速加成封顶 +100%（`WEAPON_RATE_CAP`）：超过上限的射速卡不再加速，但减益仍照常生效
+function weaponRateMul(w) { return Math.min(WEAPON_RATE_CAP, w.rateMul || 1); }
+
 function updateWeapons(dt) {
   weapons.forEach(w => {
     const def = WEAPON_DEFS[w.type];
     w.cd -= dt;
-    const reload = def.reload / (w.rateMul || 1);
+    const reload = def.reload / weaponRateMul(w);
     if (w.cd <= 0) {
       const target = nearestEnemy(squad.x, squad.y, def.range * (w.rangeMul || 1));
       if (target) {
-        soldiers.forEach(s => fireWeapon(w, s.x, s.y, target));
+        // 「一轮」= 武器的一次开火，而不是每个小兵各一轮：所有小兵共用同一个 volley 标记，
+        // 于是「增援」提高的是总弹量，而不是闪电的判定次数
+        const volleyTag = { spent: false };
+        soldiers.forEach(s => fireWeapon(w, s.x, s.y, target, volleyTag));
         w.cd = reload;
       }
     }
   });
 }
 
-function fireWeapon(w, x, y, target) {
+function fireWeapon(w, x, y, target, volleyTag) {
   const def = WEAPON_DEFS[w.type];
   const cnt = def.baseCount + w.extraCount;
   const dmg = def.dmg * w.dmgMul * stats.bulletDamage;
@@ -2232,20 +2540,19 @@ function fireWeapon(w, x, y, target) {
   const baseAng = Math.atan2(target.y - y, target.x - x);
   const volley = spread ? baseAng + (Math.random() - 0.5) * spread : baseAng;   // 整轮共用一次散布
   const offStep = def.offset || 8;
-  const conv = def.converge || 0;
+  // 相邻弹丸的角间隔。抖动幅度必须小于它的一半，否则远处会出现「顺序反转」＝弹道交叉
+  const gap = cnt > 1 ? spread / (cnt - 1) : 0;
   for (let i = 0; i < cnt; i++) {
-    // 多发弹道：沿垂直方向错开枪口位置；有 converge 的武器（散弹）在 converge 距离处收束，
-    // 于是「弹丸越多 = 总伤害越高」在近距成立，超出收束距离才散开
+    // 多发弹道：每颗弹丸在散布锥里占一个**固定角度**（按编号从一侧排到另一侧），同时沿垂直方向错开枪口位置，
+    // 两者同号 → 弹丸自枪口起就是发散的扇形，编号顺序永远不变、**彼此不会交叉**。
+    // （V1.23 修：旧版每颗弹丸都瞄向 converge 距离处的一个点，弹道会「先交叉再分散」，
+    //   收束距离内 5 颗挤成一束、贴脸必吃满伤害，观感上也像子弹互相穿过。）
+    const t = cnt > 1 ? (i / (cnt - 1)) - 0.5 : 0;               // -0.5 ~ +0.5
     const off = (i - (cnt - 1) / 2) * offStep;
     const bx = x + Math.cos(volley + Math.PI / 2) * off;
     const by = y + Math.sin(volley + Math.PI / 2) * off;
-    let ang = volley;
-    if (conv > 0) {
-      const tx = x + Math.cos(volley) * conv, ty = y + Math.sin(volley) * conv;
-      ang = Math.atan2(ty - by, tx - bx);
-    }
-    if (spread) ang += (Math.random() - 0.5) * spread * (conv > 0 ? 0.3 : 1);   // 收束弹丸只留少量抖动
-    const b = { x: bx, y: by, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, dmg, r: def.tracer ? 4 : 3, aoe: 0, burnDps: 0, burnTime: 0, color: def.color, pierce, split, splitCount, hit: null, tracer: !!def.tracer };
+    let ang = volley + t * spread + (Math.random() - 0.5) * gap * 0.8;   // 锥内固定角 + 少量抖动
+    const b = { x: bx, y: by, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, dmg, r: def.tracer ? 4 : 3, aoe: 0, burnDps: 0, burnTime: 0, color: def.color, pierce, split, splitCount, hit: null, tracer: !!def.tracer, volley: volleyTag };
     if (def.falloff) {                 // 距离衰减：命中时按飞行距离结算（贴脸增伤、远距减伤）
       b.sx = bx; b.sy = by;
       b.fo = def.falloff;
@@ -2279,15 +2586,16 @@ function updateSummons(dt) {
   summons.forEach(s => {
     if (s.type === 'scythe') {
       const def = SUMMON_DEFS.scythe;
-      s.orbitAngle = (s.orbitAngle || 0) + def.orbitSpeed * (s.rateMul || 1) * dt;
-      updateScythe(s);
+      const prevAngle = s.orbitAngle || 0;
+      s.orbitAngle = prevAngle + def.orbitSpeed * (s.rateMul || 1) * dt;
+      updateScythe(s, prevAngle);
     } else if (s.type === 'sword') {
       updateSword(s, dt);
     } else if (s.type === 'ice') {
       s.cd -= dt;
       updateIce(s);
     } else {
-      s.cd -= dt;                    // 火球 / 雷电：由攻击命中时触发
+      s.cd -= dt;                    // 火球：由攻击命中时触发（雷电改为开火判定，不用 cd）
     }
   });
 }
@@ -2301,31 +2609,51 @@ function scytheAnchor() {
   return { x: x / soldiers.length, y: y / soldiers.length };
 }
 
-function updateScythe(s) {
+function updateScythe(s, prevAngle) {
   const def = SUMMON_DEFS.scythe;
   const cnt = def.baseCount + s.extraCount;
   const dmg = def.dmg * s.dmgMul * powerBaseDamage(s);
   const rad = def.orbitRadius;                    // 环半径固定：变大只放大刀刃，不会把刀推远
   const hitR = def.hitR * (s.sizeMul || 1);       // 判定半径（含刀刃容差），贴身敌人也能扫到
   const anchor = scytheAnchor();
+  const a0 = prevAngle === undefined ? (s.orbitAngle || 0) : prevAngle;
+  const a1 = s.orbitAngle || 0;
   for (let i = 0; i < cnt; i++) {
-    const a = (s.orbitAngle || 0) + (Math.PI * 2 / cnt) * i;
-    const bx = anchor.x + Math.cos(a) * rad;
-    const by = anchor.y + Math.sin(a) * rad;
+    const step = (Math.PI * 2 / cnt) * i;
+    const x0 = anchor.x + Math.cos(a0 + step) * rad;
+    const y0 = anchor.y + Math.sin(a0 + step) * rad;
+    const x1 = anchor.x + Math.cos(a1 + step) * rad;
+    const y1 = anchor.y + Math.sin(a1 + step) * rad;
+    // 掠过判定：这一帧刀刃从 (x0,y0) 扫到 (x1,y1)，判定线段到敌人的距离。
+    // 只判当前点的话，转速拉满 / 帧率低时刀刃会「跳过」一段弧而漏掉敌人。
+    const sx = x1 - x0, sy = y1 - y0;
+    const seg2 = sx * sx + sy * sy || 1;
     for (const e of enemies) {
-      if (Math.hypot(bx - e.x, by - e.y) < hitR + e.r) {
-        if (!e.scytheT || gameTime - e.scytheT > def.hitCd) {
-          hitEnemy(e, dmg, 0, 0);
-          if (s.lifesteal > 0) leechHeal(dmg * s.lifesteal);       // 吸血（饮血卡 / 进化 · 死神镰刀）
-          if (s.knockback && e.kbT <= 0 && e.type !== 'boss') {   // Boss 免疫击退
-            const kx = e.x - bx, ky = e.y - by;
-            const kl = Math.hypot(kx, ky) || 1;
-            e.kbx = (kx / kl) * 240;
-            e.kby = (ky / kl) * 240;
-            e.kbT = 1; // 1 秒击退抗性
-          }
-          e.scytheT = gameTime;
+      if (e.dead) continue;
+      let t = ((e.x - x0) * sx + (e.y - y0) * sy) / seg2;
+      t = t < 0 ? 0 : (t > 1 ? 1 : t);
+      const nx = x0 + sx * t, ny = y0 + sy * t;      // 线段上离敌人最近的点
+      if (Math.hypot(e.x - nx, e.y - ny) >= hitR + e.r) continue;
+      if (!e.scytheT || gameTime - e.scytheT > def.hitCd) {
+        // 质变链：先 roll 割裂（同一刀挂上的出血也能吃到下面的噬魂加成），再按是否有割裂结算噬魂加伤 / 吸血
+        const bleedLv = cardLv('scythe-bleed');
+        if (bleedLv > 0 && Math.random() < SCYTHE_BLEED_CHANCE[bleedLv - 1]) {
+          applyBleed(e, dmg * SCYTHE_BLEED_PCT[bleedLv - 1], BLEED_TIME);
         }
+        const reapLv = e.bleedT > 0 ? cardLv('scythe-reap') : 0;
+        const dealt = reapLv > 0 ? dmg * (1 + SCYTHE_REAP_DMG[reapLv - 1]) : dmg;
+        hitEnemy(e, dealt, 0, 0);
+        if (s.lifesteal > 0) leechHeal(dmg * s.lifesteal);       // 吸血（饮血卡 / 进化 · 死神镰刀）
+        if (reapLv > 0) leechHeal(dealt * SCYTHE_REAP_LEECH[reapLv - 1], '#ff8f9a');   // 噬魂：割裂目标额外回血
+        tryExecute(e);                                          // 死神降临：处决线以下直接斩落
+        if (s.knockback && e.kbT <= 0 && e.type !== 'boss') {   // Boss 免疫击退
+          const kx = e.x - nx, ky = e.y - ny;
+          const kl = Math.hypot(kx, ky) || 1;
+          e.kbx = (kx / kl) * 240;
+          e.kby = (ky / kl) * 240;
+          e.kbT = 1; // 1 秒击退抗性
+        }
+        e.scytheT = gameTime;
       }
     }
   }
@@ -2336,7 +2664,7 @@ function triggerFireball() {
   const s = getSummon('fireball');
   if (!s) return;
   const def = ELEMENT_DEFS.fireball;
-  const cd = def.cd / (s.rateMul || 1) * (stats.elementalCd || 1);
+  const cd = def.cd / (s.rateMul || 1);
   if (s.cd > 0) return;
   const target = nearestEnemy(squad.x, squad.y, Infinity);
   if (!target) return;
@@ -2358,42 +2686,85 @@ function fireFireballBullet(x, y, target, s, jitter = 0) {
   bullets.push({ x, y, vx: Math.cos(base) * def.speed, vy: Math.sin(base) * def.speed, dmg, r: 6, aoe, burnDps, burnTime, color: def.color, pierce: 0, split: 0, hit: null, fireball: true });
 }
 
-// 雷电：攻击命中敌人时随机劈一名敌人，带冷却（元素伤害）
+// 雷电：子弹「命中敌人」时按概率召唤闪电（元素伤害），无冷却。
+// 额外闪电数 = chainLv（1~4 道，覆盖式），总伤害随层数 -10%~-40%；满 4 层触发概率翻倍。
+// V1.13：概率保持原样（基础 50%，满层 ×2 = 100%），改用**调高硬性间隔**来压频率 ——
+// 高射速武器（机枪 0.175s 一轮）会长期顶在间隔上限上，这才是「闪电刷屏」的真正来源。
+const LIGHTNING_BASE_CHANCE = 0.5;
+const LIGHTNING_EXTRA_DMG = [0, -0.1, -0.2, -0.3, -0.4];   // 索引 = chainLv
+const LIGHTNING_DELAY = 0.15;                              // 落雷延迟：让子弹先出膛，视觉顺序更自然
+const LIGHTNING_MIN_INTERVAL = 0.30;                       // 硬性触发间隔：两次落雷之间至少 0.30s（上限 ≈3.33 次/秒）
+let pendingLightning = [];                                 // 已判定成功、等待落雷的剩余倒计时
+let lightningCdT = 0;                                      // 硬性触发间隔的剩余时间
+
+// 触发概率只由「额外闪电」层数决定：0~3 层 50%，满 4 层翻倍到 100%。
+// V1.20 去掉了所有「触发概率加成」类选项（Boss 奖励「闪电触发概率 +20%」整张卡、
+// 进化「苍穹雷暴」的 ×1.5），概率这条线不再有任何可叠加的加成。
+function lightningChance(s) {
+  const lv = Math.min(4, s.chainLv || 0);
+  return lv >= 4 ? 1 : LIGHTNING_BASE_CHANCE;
+}
+
+// 触发判定在「子弹命中敌人」时进行（而不是开火时）：先确认这一轮真的打到了人再落雷。
+// 「一轮」= 武器的一次开火（所有小兵共用同一个标记），所以每轮最多只记一次。
+//
+// V1.19 改成「窗口制」：一次落雷之后的 LIGHTNING_MIN_INTERVAL 秒算一个窗口，
+// 窗口内只要有子弹命中过敌人，就在窗口结束时判定一次。于是落雷频率 = max(硬间隔, 武器开火间隔)，
+// 可以连续调；旧规则是「命中时判定 + cd 拦截」，cd 还没走完的那次命中机会被白白浪费，
+// 频率被量化成「开火间隔的整数倍」——机枪开火 0.175s，硬间隔只要落在 (0.175, 0.35] 里
+// 一律等效 0.35s（2.72 次/秒），改 0.30 / 0.25 / 0.20 全都一样。
+let lightningPending = false;                              // 当前窗口内是否有过命中（等窗口结束再判定）
+
+function tryLightning() {
+  const s = getSummon('lightning');
+  lightningPending = false;
+  if (!s) return;
+  if (Math.random() >= lightningChance(s)) return;
+  lightningCdT = LIGHTNING_MIN_INTERVAL;
+  pendingLightning.push(LIGHTNING_DELAY);
+}
+
+function rollLightningOnHit(v) {
+  if (!v || v.spent) return;
+  v.spent = true;
+  if (!getSummon('lightning')) return;
+  if (lightningCdT > 0) { lightningPending = true; return; }   // 窗口未结束：先记下「这轮打到了人」
+  tryLightning();                                              // 窗口刚过：立刻判定
+}
+
+function updatePendingLightning(dt) {
+  if (lightningCdT > 0) lightningCdT = Math.max(0, lightningCdT - dt);
+  if (lightningCdT <= 0 && lightningPending) tryLightning();   // 窗口结束：用窗口内的命中补一次判定
+  if (!pendingLightning.length) return;
+  for (let i = pendingLightning.length - 1; i >= 0; i--) {
+    pendingLightning[i] -= dt;
+    if (pendingLightning[i] <= 0) {
+      pendingLightning.splice(i, 1);
+      triggerLightning();
+    }
+  }
+}
+
 function triggerLightning() {
   const s = getSummon('lightning');
   if (!s) return;
+  if (enemies.every(e => e.dead)) return;
   const def = ELEMENT_DEFS.lightning;
-  const cd = def.cd / (s.rateMul || 1) * (stats.elementalCd || 1);
-  if (s.cd > 0) return;
-  if (enemies.length === 0) return;
-  const dmg = def.dmg * s.dmgMul * powerBaseDamage(s);
-  const strikes = (def.strikes || 1) + (s.extraCount || 0);
-  const chain = s.chain || 0;
+  const lv = Math.min(4, s.chainLv || 0);
+  const dmg = def.dmg * s.dmgMul * powerBaseDamage(s) * (1 + LIGHTNING_EXTRA_DMG[lv]);
+  const strikes = 1 + lv;
   const hit = new Set();
   const alive = () => enemies.filter(e => !e.dead && !hit.has(e));   // 尚未被劈到的敌人（优先）
   const any = () => enemies.filter(e => !e.dead);
 
-  let pool = alive();
-  if (!pool.length) return;
-  let cur = pool[Math.floor(Math.random() * pool.length)];
-  strikeEnemy(cur, dmg, hit);
-
-  for (let i = 1; i < strikes; i++) {
-    // 目标不够时重复劈已命中的敌人，保证「闪电 +1」在单体战里也有收益
-    pool = alive();
+  for (let i = 0; i < strikes; i++) {
+    // 目标不够时重复劈已命中的敌人，保证「额外闪电」在单体战里也有收益
+    let pool = alive();
     if (!pool.length) pool = any();
     if (!pool.length) break;
-    cur = pool[Math.floor(Math.random() * pool.length)];
+    const cur = pool[Math.floor(Math.random() * pool.length)];
     strikeEnemy(cur, dmg, hit);
   }
-
-  for (let c = 0; c < chain; c++) {
-    const next = nearestUnstruck(cur.x, cur.y, hit, 200);
-    if (!next) break;
-    strikeEnemy(next, dmg, hit);
-    cur = next;
-  }
-  s.cd = cd;
 }
 
 function strikeEnemy(e, dmg, hit) {
@@ -2405,16 +2776,6 @@ function strikeEnemy(e, dmg, hit) {
   if (stats.lifesteal > 0) leechHeal(dmg * stats.lifesteal);
   if (e.hp <= 0) killEnemy(e);
   hit.add(e);
-}
-
-function nearestUnstruck(x, y, hit, radius) {
-  let best = null, bd = radius * radius;
-  for (const e of enemies) {
-    if (hit.has(e) || e.dead) continue;
-    const d = (e.x - x) ** 2 + (e.y - y) ** 2;
-    if (d < bd) { bd = d; best = e; }
-  }
-  return best;
 }
 
 // 落雷：预生成锯齿路径 + 分叉，配合命中闪光与地面冲击环（短促的一劈）
@@ -2486,27 +2847,30 @@ function updateIce(s) {
     });
   }
   sfxIce();
-  s.cd = def.cd / (s.rateMul || 1) * (stats.elementalCd || 1);
+  s.cd = def.cd / (s.rateMul || 1);
 }
 
 // 冰刺命中：霜冻减速 + 概率冰冻，并在命中处炸开碎冰
 function applyIceHit(b, e) {
-  applyFrost(e, b.frost.mul, b.frost.time);
-  if (b.frost.chance > 0 && Math.random() < b.frost.chance) {
-    e.freezeT = Math.max(e.freezeT || 0, b.frost.freezeTime * (e.type === 'boss' ? 0.5 : 1));
-  }
+  tryApplyFrost(e, b.frost.mul, b.frost.time);
+  if (b.frost.chance > 0 && Math.random() < b.frost.chance) tryApplyFreeze(e, b.frost.freezeTime);
   iceSpikes.push({ x: b.x, y: b.y, r: Math.max(11, e.r * 1.05), life: 0.42, maxLife: 0.42, seed: Math.random() * 10 });
   spawnParticles(b.x, b.y, '#8fe3ff', 10);
   spawnParticles(b.x, b.y, '#dff6ff', 5);
 }
 
-// 霜冻：减速（Boss 元素效果减半：时长与减速幅度都减半）
-function applyFrost(e, mul, time) {
+// 霜冻（减速）：不可叠加（覆盖式），受独立抗性拦截；Boss 元素效果减半（时长与幅度都减半）
+// 减速成功后再由「冻伤」roll 冰冻
+function tryApplyFrost(e, mul, time) {
+  if (e.resistFrostT > 0) return false;
   const boss = e.type === 'boss';
-  const t = time * (boss ? 0.5 : 1);
+  const t = (time || FROST_TIME) * (boss ? 0.5 : 1) * statusDur();
   const m = boss ? 1 - (1 - mul) * 0.5 : mul;
-  e.frostT = Math.max(e.frostT || 0, t);
-  e.frostMul = Math.min(e.frostMul === undefined ? 1 : e.frostMul, Math.max(0.15, m));
+  e.frostT = t;
+  e.frostMul = Math.max(0.15, m);
+  e.resistFrostT = statusResistTime(e);
+  rollFrostbite(e);
+  return true;
 }
 
 // 飞剑索敌：视野（以小队为中心）内优先选「短时间内没被任何飞剑穿过」的最近敌人
@@ -2574,6 +2938,8 @@ function updateSword(s, dt) {
       if (b.hitSet.indexOf(e) >= 0) continue;      // 同一趟已经吃过伤害
       b.hitSet.push(e);
       hitEnemy(e, dmg, 0, 0);
+      rollSwordMark(e);                            // 剑印：命中留印，被标记的敌人吃更多伤害
+      swordQi(e, dmg);                            // 剑气：向四周溅射
       e.swordT = gameTime;                         // 软避让标记
       spawnSwordSlash(e.x, e.y, b.ang);
     }
@@ -2595,6 +2961,7 @@ function updateSword(s, dt) {
         if (Math.hypot(o.x - first.x, o.y - first.y) < 46 + o.r) {
           b.hitSet.push(o);
           hitEnemy(o, dmg, 0, 0);
+          rollSwordMark(o);
           if (++n >= chain) break;
         }
       }
@@ -2732,10 +3099,9 @@ function updatePet(dt) {
 
 function firePetBullet(x, y, target) {
   const def = PET_DEFS[pet.type];
-  // 宠物喷吐为元素伤害：吃宠物乘区 + 元素乘区；元素乘区下限为 1，
-  // 因此「元素归零」类效果不会把宠物伤害清空，但元素加成仍能放大它
-  const eleMul = Math.max(1, stats.elementalDamage);
-  const dmg = def.dmg * pet.dmgMul * stats.petDamage * eleMul;
+  // 宠物喷吐为元素伤害：吃宠物乘区 + 元素乘区（元素乘区不再单独保底，
+  // 与元素线同规则——元素加成能放大它，元素减益同样作用于它）
+  const dmg = def.dmg * pet.dmgMul * stats.petDamage * stats.elementalDamage;
   // 点燃同样吃宠物乘区与「灼烧」加成（此前是固定值，完全不吃宠物伤害卡）
   const burnDps = (def.burnDps || 0) * (pet.burnMul || 1) * pet.dmgMul;
   const burnTime = (def.burnTime || 0) * (pet.burnTimeMul || 1);
@@ -2793,12 +3159,14 @@ function updateBullets(dt) {
         if (!b.hit) b.hit = new Set();
         if (b.hit.has(e)) continue;
         b.hit.add(e);
+        rollLightningOnHit(b.volley);   // 闪电：本轮子弹打到敌人时才判定（每轮一次）
         const dmg = b.fo ? b.dmg * falloffMul(b) : b.dmg;   // 距离衰减（散弹）
         const near = b.guard && b.fo && Math.hypot(b.x - b.sx, b.y - b.sy) <= b.fo.near;
         if (b.pierce > 0) {
           b.pierce--;                       // 消耗一次穿透，子弹继续飞行
           applyBulletKnockback(e, b);
           hitEnemy(e, dmg, b.burnDps, b.burnTime);
+          if (!b.petShot) rollEnchants(e);  // 子弹附魔：命中时按概率挂点燃 / 减速
           if (near && e.dead) closeKillReward();
           if (b.frost) applyIceHit(b, e);
           if (e.dead && b.split) tryShotgunSplit(e, b);
@@ -2808,6 +3176,7 @@ function updateBullets(dt) {
           } else {
             applyBulletKnockback(e, b);
             hitEnemy(e, dmg, b.burnDps, b.burnTime);
+            if (!b.petShot) rollEnchants(e);
             if (b.petShot) petOnHit(b, e, dmg);
             if (near && e.dead) closeKillReward();
             if (b.frost) applyIceHit(b, e);
@@ -2872,19 +3241,213 @@ function explode(b) {
   }
 }
 
-// 点燃：Boss 元素效果减半；强度取较高者、时长取较长者
+// ==================== 状态与抗性（V1.10） ====================
+// 点燃 / 减速 / 冰冻三类**各自独立**计时抗性：施加成功即进入抗性，抗性期间免疫同类施加。
+// 抗性时长：普通 0.5s、精英 1.0s、Boss 1.5s。点燃与减速不可叠加（覆盖式），
+// 只有「爆裂」的额外点燃层可单独叠加。
+const BURN_DPS = 6;                                   // 火焰附魔的点燃基础伤害（每秒）
+const BURN_TIME = 3;                                  // 火焰附魔点燃持续（V1.23：2s → 3s）
+const FROST_MUL = 0.6;                                // 霜冻附魔减速后的移速倍率（= 减速 40%）
+const FROST_TIME = 2;                                 // 霜冻附魔减速持续（V1.23：1s → 2s）
+const FREEZE_TIME = 3;                                // 冻伤的冰冻持续
+const ENCH_FIRE_CHANCE = [0.10, 0.25, 0.40, 0.60];    // 火焰附魔 1~4 层
+const ENCH_FROST_CHANCE = [0.10, 0.20, 0.35, 0.50];   // 霜冻附魔 1~4 层
+const SEVERE_BURN = [0.10, 0.20, 0.35, 0.50];         // 严重灼伤：点燃伤害加成（覆盖式）
+const FROSTBITE_CHANCE = [0.10, 0.20, 0.35, 0.50];    // 冻伤：冰冻概率（覆盖式）
+const FROSTBITE_HP = [0.05, 0.10, 0.15, 0.25];        // 冻伤：扣除当前生命（精英 5% / Boss 1%）
+const BLAST_RADIUS = 70, BLAST_HP = 0.05;             // 爆裂：范围与按生命上限的百分比伤害
+const WINTER_RADIUS = 90, WINTER_HP = 0.25;           // 凛冬：同上
+
+// ===== 召唤物质变链（V1.22）：镰刀「出血斩杀」 / 飞剑「剑印剑气」 =====
+// 结构照搬附魔线：基础卡可叠 4 层 → 进阶卡（需先选基础卡）可叠 4 层 → 一次性大招（需先选进阶卡）
+const BLEED_TIME = 3;                                   // 割裂持续（每次命中刷新）
+const SCYTHE_BLEED_CHANCE = [0.20, 0.35, 0.50, 0.70];   // 割裂 1~4 层：命中触发概率
+const SCYTHE_BLEED_PCT = [0.50, 1.00, 1.50, 2.00];      // 割裂每秒伤害 = 镰刀单次伤害 × 该比例
+const SCYTHE_REAP_DMG = [0.20, 0.35, 0.50, 0.70];       // 噬魂 1~4 层：对被割裂目标的额外伤害
+const SCYTHE_REAP_LEECH = [0.03, 0.05, 0.07, 0.10];     // 噬魂：命中被割裂目标的吸血比例
+const EXECUTE_HP = 0.15;                                // 死神降临：处决线（生命低于上限的该比例）
+const EXECUTE_HEAVY_HP = 0.06;                          // 精英 / Boss 在处决线以下改吃「生命上限 6%」的伤害
+const EXECUTE_CD = 2;                                   // 同一敌人两次处决判定的最小间隔
+const SWORD_MARK_TIME = 3;                              // 剑印持续
+const SWORD_MARK_CHANCE = [0.20, 0.35, 0.50, 0.70];     // 剑印 1~4 层：命中触发概率
+const SWORD_MARK_VULN = [0.08, 0.14, 0.20, 0.28];       // 被剑印标记的敌人受到的伤害 +N%（与嗜血同类加算）
+const SWORD_QI_RADIUS = 70;                             // 剑气溅射半径
+const SWORD_QI_PCT = [0.25, 0.40, 0.55, 0.75];          // 剑气：溅射伤害 = 本次斩击伤害 × 该比例（最多波及 4 名）
+const TOMB_RADIUS = 80, TOMB_HP = 0.08;                 // 剑冢：带剑印的敌人阵亡时的范围伤害（按生命上限）
+let burstDepth = 0;                                   // 死亡爆炸递归深度（>0 时不再触发，防连锁）
+
+function statusResistTime(e) {
+  return e.type === 'boss' ? 1.5 : (e.type === 'elite' ? 1.0 : 0.5);
+}
+// 已选层数（上限 4）；爆裂 / 凛冬这类一次性卡用 > 0 判断是否拥有
+function cardLv(id) { return Math.min(4, pickCount[id] || 0); }
+
+// 异常元素效果的持续时间倍率（「元素亲和」+35%）；抗性计时不受它影响
+function statusDur() { return stats.statusDuration || 1; }
+
+// 点燃：不可叠加（覆盖旧层），受抗性拦截；Boss 元素效果减半
 function applyBurn(e, burnDps, burnTime) {
-  if (!(burnDps > 0)) return;
+  if (!(burnDps > 0)) return false;
+  if (e.resistBurnT > 0) return false;
   const f = e.type === 'boss' ? 0.5 : 1;
-  const dps = burnDps * stats.elementalDamage * f;
-  if (!e.burnT || dps > e.burnDps) e.burnDps = dps;
-  e.burnT = Math.max(e.burnT || 0, (burnTime || 3) * f);
+  e.burnDps = burnDps * (1 + (stats.burnDamage || 0)) * stats.elementalDamage * f;
+  e.burnT = (burnTime || BURN_TIME) * f * statusDur();
+  e.resistBurnT = statusResistTime(e);
+  return true;
+}
+
+// 爆裂的额外点燃层：单独叠加、无视抗性（即卡面写的「双倍点燃伤害」）
+function pushBurnStacks(e, n) {
+  const f = e.type === 'boss' ? 0.5 : 1;
+  const dps = BURN_DPS * (1 + (stats.burnDamage || 0)) * stats.elementalDamage * f;
+  if (!e.burnExtra) e.burnExtra = [];
+  for (let i = 0; i < n; i++) e.burnExtra.push({ dps, t: BURN_TIME * f * statusDur() });
+}
+
+// 当前点燃总伤害（主层 + 爆裂的额外层）
+function burnTotalDps(e) {
+  let d = (e.burnT > 0 && e.burnDps > 0) ? e.burnDps : 0;
+  if (e.burnExtra) for (const b of e.burnExtra) d += b.dps;
+  return d;
+}
+
+// ===== 镰刀：割裂 / 斩杀（V1.22） =====
+// 割裂是 DoT：覆盖式刷新（不叠层），伤害直接快照「镰刀单次伤害 × 比例」，Boss 减半（与点燃一致）。
+// 不给抗性——镰刀命中频率高，割裂本来就是要靠投资把它顶成常驻。
+function applyBleed(e, dps, time) {
+  if (!(dps > 0)) return false;
+  const f = e.type === 'boss' ? 0.5 : 1;
+  e.bleedDps = dps * f;
+  e.bleedT = time || BLEED_TIME;
+  return true;
+}
+
+// 死神降临：被割裂的目标进入处决线后，镰刀掠过直接斩落。
+// 普通怪直接处决；精英 / Boss 改为额外吃一次「生命上限 6%」的伤害（同样不进任何伤害乘区），
+// 同一敌人 2s 内只判一次，避免多把镰刀在同一帧反复结算。
+function tryExecute(e) {
+  if (cardLv('scythe-execute') <= 0) return false;
+  if (e.dead) return false;
+  if ((e.bleedT || 0) <= 0) return false;
+  if (e.hp > e.maxHp * EXECUTE_HP) return false;
+  if ((e.execT || 0) > gameTime - EXECUTE_CD) return false;
+  e.execT = gameTime;
+  if (e.type === 'boss' || e.type === 'elite') {
+    const dmg = e.maxHp * EXECUTE_HEAVY_HP;
+    e.hp -= dmg;
+    spawnDamageNumber(e.x, e.y - e.r - 10, dmg, '#ff6b6b');
+    spawnFloatText(e.x, e.y - e.r - 26, '死神降临', '#ff8080');
+    if (e.hp <= 0) killEnemy(e);
+  } else {
+    spawnFloatText(e.x, e.y - e.r - 16, '处决', '#ff6b6b');
+    spawnParticles(e.x, e.y, '#ff6b6b', 12);
+    e.hp = 0;
+    killEnemy(e);
+  }
+  return true;
+}
+
+// ===== 飞剑：剑印 / 剑气 / 剑冢（V1.22） =====
+// 剑印：命中时按概率留印，被标记的敌人受到的伤害提高（在 hitEnemy 的加算区里结算）
+function rollSwordMark(e) {
+  const lv = cardLv('sword-mark');
+  if (lv <= 0 || e.dead) return;
+  if (Math.random() < SWORD_MARK_CHANCE[lv - 1]) e.markT = SWORD_MARK_TIME;
+}
+
+// 剑气：斩击命中时向四周溅射，对附近其他敌人造成本次伤害的一部分（最多波及 4 名，避免怪群爆炸）
+function swordQi(src, dmg) {
+  const lv = cardLv('sword-qi');
+  if (lv <= 0 || !src || src.dead) return;
+  const pct = SWORD_QI_PCT[lv - 1];
+  let n = 0;
+  for (const o of enemies) {
+    if (o === src || o.dead || o.hp <= 0) continue;
+    if (Math.hypot(o.x - src.x, o.y - src.y) > SWORD_QI_RADIUS + o.r) continue;
+    hitEnemy(o, dmg * pct, 0, 0);
+    rollSwordMark(o);
+    if (++n >= 4) break;
+  }
+  if (n > 0) spawnParticles(src.x, src.y, '#dff3ff', 6);
+}
+
+// 剑冢：带剑印的敌人阵亡时原地落下一柄幻影剑，对范围内敌人造成其生命上限的伤害并重新挂印
+function tombBurst(src) {
+  spawnBlast(src.x, src.y, TOMB_RADIUS);
+  spawnParticles(src.x, src.y, '#dff3ff', 14);
+  sfxExplode();
+  for (const o of enemies) {
+    if (o.dead || o === src) continue;
+    if (Math.hypot(o.x - src.x, o.y - src.y) > TOMB_RADIUS + o.r) continue;
+    hitEnemy(o, o.maxHp * TOMB_HP, 0, 0);
+    if (!o.dead) o.markT = SWORD_MARK_TIME;
+  }
+}
+
+// 冰冻（硬控）：与点燃 / 减速各自独立抗性
+function tryApplyFreeze(e, time) {
+  if (e.resistFreezeT > 0) return false;
+  e.freezeT = Math.max(e.freezeT || 0, (time || FREEZE_TIME) * (e.type === 'boss' ? 0.5 : 1) * statusDur());
+  e.resistFreezeT = statusResistTime(e);
+  return true;
+}
+
+// 冻伤：减速成功后按概率冰冻，并立即扣除当前生命的百分比
+function rollFrostbite(e) {
+  const lv = cardLv('frostbite');
+  if (lv <= 0) return;
+  if (Math.random() >= FROSTBITE_CHANCE[lv - 1]) return;
+  if (!tryApplyFreeze(e, FREEZE_TIME)) return;
+  const pct = e.type === 'boss' ? 0.01 : (e.type === 'elite' ? 0.05 : FROSTBITE_HP[lv - 1]);
+  const dmg = e.hp * pct;
+  e.hp -= dmg;
+  spawnDamageNumber(e.x, e.y - e.r - 10, dmg, '#bfe8ff');
+  spawnFloatText(e.x, e.y - e.r - 26, '冻伤', '#8fe3ff');
+  if (e.hp <= 0) killEnemy(e);
+}
+
+// 子弹附魔：命中时按概率挂点燃 / 减速（召唤物命中不触发）
+function rollEnchants(e) {
+  const fa = cardLv('enchant-fire');
+  if (fa > 0 && Math.random() < ENCH_FIRE_CHANCE[fa - 1]) applyBurn(e, BURN_DPS, BURN_TIME);
+  const fb = cardLv('enchant-frost');
+  if (fb > 0 && Math.random() < ENCH_FROST_CHANCE[fb - 1]) tryApplyFrost(e, FROST_MUL, FROST_TIME);
+}
+
+// 状态死亡爆炸：爆裂（被点燃的敌人）/ 凛冬（被冰冻的敌人）/ 剑冢（带剑印的敌人）
+// 百分比伤害不进任何伤害乘区；被爆炸杀死的不再触发死亡爆炸（burstDepth 防连锁）
+function statusDeathBurst(e) {
+  if (burstDepth > 0) return;
+  const blast = cardLv('blast') > 0 && (e.burnT || 0) > 0;
+  const winter = cardLv('winter') > 0 && (e.freezeT || 0) > 0;
+  const tomb = cardLv('sword-tomb') > 0 && (e.markT || 0) > 0;
+  if (!blast && !winter && !tomb) return;
+  burstDepth++;
+  if (blast) burstArea(e, BLAST_RADIUS, e.maxHp * BLAST_HP, true);
+  if (winter) burstArea(e, WINTER_RADIUS, e.maxHp * WINTER_HP, false);
+  if (tomb) tombBurst(e);
+  burstDepth--;
+}
+
+function burstArea(src, radius, dmg, refuel) {
+  spawnBlast(src.x, src.y, radius);
+  spawnParticles(src.x, src.y, refuel ? '#ff9d3b' : '#8fe3ff', 14);
+  sfxExplode();
+  for (const o of enemies) {
+    if (o.dead || o === src) continue;
+    if (Math.hypot(o.x - src.x, o.y - src.y) > radius + o.r) continue;
+    hitEnemy(o, dmg, 0, 0);
+    if (refuel) pushBurnStacks(o, 2);     // 爆裂：被波及的敌人再挂 2 层点燃
+  }
 }
 
 function hitEnemy(e, dmg, burnDps, burnTime) {
+  if (devOneShot) dmg = e.hp + (e.shield || 0) + 1;   // 调试：秒杀（连盾一起打穿）
   e.hitFlashUntil = gameTime + 0.09;
-  // 易伤：敌人受到的伤害加成（同类加算，只乘一次）
-  if (stats.vuln > 0) dmg *= 1 + stats.vuln;
+  // 易伤：敌人受到的伤害加成（同类加算，只乘一次）。剑印（被飞剑标记）与嗜血共用这个加算区
+  const markLv = e.markT > 0 ? cardLv('sword-mark') : 0;
+  const markVuln = markLv > 0 ? SWORD_MARK_VULN[markLv - 1] : 0;
+  if (stats.vuln > 0 || markVuln > 0) dmg *= 1 + stats.vuln + markVuln;
   // 敌方护盾优先吸收（破盾后 3 秒开始恢复）
   if (e.shieldMax > 0 && e.shield > 0) {
     const absorb = Math.min(e.shield, dmg);
@@ -2904,7 +3467,8 @@ function hitEnemy(e, dmg, burnDps, burnTime) {
   if (burnDps > 0) applyBurn(e, burnDps, burnTime);
   spawnParticles(e.x, e.y, '#ffffff', 2);
   triggerFireball();
-  triggerLightning();
+  // 分裂者被动：血量每损失一档就裂出一只分身（见 tryBossSplitOff）
+  if (e.type === 'boss' && e.kind === 'splitter' && e.hp > 0) tryBossSplitOff(e);
   if (e.hp <= 0) killEnemy(e);
 }
 
@@ -2912,17 +3476,21 @@ function killEnemy(e) {
   if (e.dead) return;
   e.dead = true;
   kills++;
-  runCoins += ENEMY_TYPES[e.type].coin || 0;
+  runCoins += coinDrop(e.type);
   shake = Math.min(10, shake + (e.type === 'boss' ? 8 : 1.5));
   sfxKill();
   spawnParticles(e.x, e.y, ENEMY_TYPES[e.type].color, 8);
   if (e.type === 'bomber') enemyExplode(e);      // 自爆怪：死亡也炸
+  if (e.affixVolatile) affixExplode(e);          // 殉爆词缀：死亡原地爆炸
+  if (e.affixSplit) spawnSplitElites(e);         // 分裂词缀：死亡裂成 2 只残血小精英
   dropXp(e);
   killExplosionAt(e.x, e.y);
+  statusDeathBurst(e);                           // 爆裂 / 凛冬：状态死亡爆炸
   if (e.type === 'boss') {
     bossKills++;
     difficulty = Math.min(3, difficulty + 0.25);
     rerollLeft++;
+    bossArena = null;                              // 首领阵亡：解除场地封锁
     // 世界变化：地图上长出树木与藤蔓，并提升经验与出怪
     spawnFlora(6 + Math.min(4, bossKills), 4 + Math.min(3, Math.floor(bossKills / 2)));
     showBanner(`世界异变：经验 +${Math.round((xpScale() - 1) * 100)}% · 出怪 +${Math.round((spawnScale() - 1) * 100)}%`, 2.4);
@@ -2965,11 +3533,12 @@ function enemyExplode(e) {
   spawnParticles(e.x, e.y, '#ff9d3b', 20);
   // 共享血池：一次爆炸只结算一次伤害（不随命中人数翻倍）
   const hit = soldiers.find(s => Math.hypot(s.x - e.x, s.y - e.y) < def.boomR + S.soldierR);
-  if (hit) damageSoldier(hit, dmg);
+  if (hit && !e.devPeaceful) damageSoldier(hit, dmg);              // 调试：停手的敌人爆炸不掉血
   e.dead = true;
 }
 
 function moveEnemy(e, target, dt) {
+  if (e.devStatic) return;                                           // 调试：站桩敌人不移动
   if (e.freezeT > 0) return;                                        // 冰冻：完全无法移动
   const dx = target.x - e.x, dy = target.y - e.y;
   const len = Math.hypot(dx, dy) || 1;
@@ -3030,9 +3599,354 @@ function fireBarrageWall(e) {
   spawnParticles(e.x, e.y, '#c08bff', 16);
 }
 
-// 弹幕者技能模组：环形弹幕 → 瞄准扇射 → 螺旋扫射 →（二阶段）弹幕墙，按顺序轮换
+// ==================== 首领 AI（V1.25） ====================
+// 行为总入口。状态优先级：位移中 > 蓄力 > 施法中 > 常规走位 + 技能模组。
+// 「灵活性」由通用层提供（轨道走位 / 位移），各 Boss 只负责自己的招牌技能。
+function updateBoss(e, target, dt) {
+  // if (e.blinkCd > 0) e.blinkCd -= dt;   // （V1.25.1 停用）召唤者闪现的冷却，随闪现一起注释
+
+  // 二阶段：血量降到一半后狂暴（各 Boss 的追加效果不同）
+  if (!e.phase2 && e.hp <= e.maxHp * 0.5) enterBossPhase2(e);
+
+  // ---- 调试：停手的首领只走位（不出招、不放弹幕、不撞人）----
+  if (e.devPeaceful) {
+    if (e.dashT > 0) e.dashT = 0;                    // 取消进行中的位移，避免停在半路
+    e.skillState = 'idle';
+    e.castT = 0;
+    moveBoss(e, target, dt);
+    return;
+  }
+
+  // ---- 位移中（冲锋冲刺 / 分裂突进）：完全接管移动 ----
+  // 位移距离严格按「速度 × 时长」结算（末帧只走剩余时间），不多走一帧的余量；
+  // 且位移期间只吃世界边界、不吃竞技场软限制 —— 否则会被边界顶住提前停下，
+  // 与地面上按 bossDashReach 画出的预警条长度对不上。
+  if (e.dashT > 0) {
+    const stepT = Math.min(dt, e.dashT);
+    e.dashT -= dt;
+    const step = e.dashSpd * stepT;
+    if (!e.devStatic) {                              // 调试：站桩首领原地完成位移（伤害与表现照常）
+      e.x += e.skillDirX * step;
+      e.y += e.skillDirY * step;
+      clampBossWorld(e);
+    }
+    spawnParticles(e.x, e.y, e.dashKind === 'charge' ? '#ff9d3b' : '#ffd0a0', 2);
+    if (e.dashDamage > 0) {
+      // 共享血池：一次位移只结算一次伤害（不随命中人数翻倍）
+      if (!e.skillHit) e.skillHit = new Set();
+      if (!e.skillHit.has('squad')) {
+        const hit = soldiers.find(s => Math.hypot(s.x - e.x, s.y - e.y) < e.r + S.soldierR);
+        if (hit) { e.skillHit.add('squad'); damageSoldier(hit, e.dashDamage * difficulty); }
+      }
+    }
+    if (e.dashT <= 0) onBossDashEnd(e);
+    return;
+  }
+
+  // ---- 蓄力（冲刺前摇）：原地不动，地面显示指示条 ----
+  // 蓄力前 trackFrac 比例持续把方向转向目标，之后锁定：地面上画的那条指示带与实际冲刺用的是
+  // 同一个方向向量，因此「指示带指哪儿 = 首领就冲哪儿」，不会出现玩家按指示躲避却仍被撞中的误判。
+  if (e.skillState === 'charge') {
+    aimBossCharge(e, target, dt);
+    e.skillT -= dt;
+    if (e.skillT <= 0) startBossDash(e, target);
+    return;
+  }
+
+  // ---- 施法中（召唤阵）：站桩读条，位置由预警圈提前告诉玩家 ----
+  if (e.castT > 0) {
+    e.castT -= dt;
+    if (e.castT <= 0) resolveBossCast(e);
+    return;
+  }
+
+  // ---- 常规：维持距离 + 绕圈 ----
+  moveBoss(e, target, dt);
+  e.atkCd -= dt;
+  if (target !== squad) {
+    const d = Math.hypot(e.x - target.x, e.y - target.y);
+    if (d < e.r + S.soldierR + CONTACT_PAD && e.atkCd <= 0) {
+      damageSoldier(target, e.dmg);
+      e.atkCd = 1.0;
+    }
+  }
+
+  if (e.kind === 'barrage') updateBarrageBoss(e, target, dt);
+  else if (e.kind === 'summoner') updateSummonerBoss(e, target, dt);
+  else if (e.kind === 'splitter') updateSplitterBoss(e, target, dt);
+  else updateChargeBoss(e, target, dt);
+
+  // 通用八向弹幕：给不走「技能模组」的 Boss 兜底（弹幕者已经有完整轮换，不需要）
+  if (e.kind !== 'barrage') {
+    e.burstCd -= dt;
+    if (e.burstCd <= 0) {
+      fireBossBurst(e);
+      e.burstCd = e.kind === 'summoner' ? 3.5 : (e.phase2 ? 2 : 2.5);
+    }
+  }
+}
+
+// 首领位置约束：不越出世界；有竞技场时不跑出「场地 + 220」。
+// 它是「维持距离」型 AI，不做约束会绕着玩家一路漂到玩家够不到的地方。
+function clampBossInWorld(e) {
+  clampBossWorld(e);
+  if (!bossArena) return;
+  const dx = e.x - bossArena.x, dy = e.y - bossArena.y;
+  const d = Math.hypot(dx, dy);
+  const lim = bossArena.r + 220;
+  if (d > lim) { e.x = bossArena.x + (dx / d) * lim; e.y = bossArena.y + (dy / d) * lim; }
+}
+
+// 仅世界边界。冲刺 / 突进期间用它：位移是短促的爆发，允许短暂越出竞技场软范围，
+// 换来的好处是「位移距离 = 预警条长度」，玩家能按指示带准确读出落点。
+function clampBossWorld(e) {
+  e.x = Math.max(e.r, Math.min(WORLD.w - e.r, e.x));
+  e.y = Math.max(e.r, Math.min(WORLD.h - e.r, e.y));
+}
+
+// 轨道走位：维持各自的中距离（orbitR）+ 横向绕圈，并周期性翻转绕行方向。
+// 朝向做平滑处理，避免每帧改向导致的抖动；减速 / 冰冻沿用与小怪一致的规则。
+function moveBoss(e, target, dt) {
+  if (e.devStatic) return;                       // 调试：站桩首领不做轨道走位
+  if (e.freezeT > 0) return;
+  e.orbitFlipT -= dt;
+  if (e.orbitFlipT <= 0) {
+    e.orbitDir = -e.orbitDir;
+    e.orbitFlipT = BOSS_MOVE.flipMin + Math.random() * (BOSS_MOVE.flipMax - BOSS_MOVE.flipMin);
+  }
+
+  const orbitR = (BOSS_KINDS[e.kind] || {}).orbitR || 250;
+  const dx = target.x - e.x, dy = target.y - e.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const ux = dx / d, uy = dy / d;
+
+  // 径向修正按偏差比例给：越接近 orbitR 修正越小，首领真正停在目标距离上。
+  // 旧版是「出死区就给满速」的开关式，落点会停在死区边缘（实测冲锋者停在 206、分裂者停在 60），
+  // 叠上频繁折返，看起来就是「原地打转」。
+  const radial = Math.max(-1, Math.min(1, (d - orbitR) / BOSS_MOVE.band));
+
+  const vx = ux * radial + (-uy * e.orbitDir) * BOSS_MOVE.strafe;
+  const vy = uy * radial + (ux * e.orbitDir) * BOSS_MOVE.strafe;
+  const slow = (enemySlowT > 0 ? SKILL_DEFS.slow.mul : 1) * (e.frostT > 0 ? (e.frostMul || 1) : 1);
+  const sp = e.speed * slow;
+
+  const want = Math.atan2(vy, vx);
+  if (e.moveAng == null) e.moveAng = want;
+  let diff = want - e.moveAng;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  const maxTurn = BOSS_MOVE.turnRate * dt;
+  e.moveAng += Math.max(-maxTurn, Math.min(maxTurn, diff));
+
+  e.x += Math.cos(e.moveAng) * sp * dt;
+  e.y += Math.sin(e.moveAng) * sp * dt;
+  clampBossInWorld(e);
+}
+
+// （V1.25.1 停用）通用位移（后跃 / 突进）：速度 = 距离 / 固定时长，走「爆发式移动」而不是堆基础移速。
+// 现在没有调用方（唯一的调用者「弹幕者后跃」已注释），整段保留以便恢复。
+// function bossLeap(e, angle, dist) {
+//   e.skillDirX = Math.cos(angle);
+//   e.skillDirY = Math.sin(angle);
+//   e.dashSpd = dist / BOSS_LEAP.time;
+//   e.dashT = BOSS_LEAP.time;
+//   e.dashDamage = 0;
+//   e.dashKind = 'leap';
+// }
+
+// 进入冲刺蓄力。wind 可缩短（二阶段连冲用）
+function enterBossCharge(e, wind) {
+  e.skillState = 'charge';
+  e.skillT = wind;
+  e.chargeWind = wind;
+}
+
+// 蓄力期间的瞄准：前 trackFrac 比例按 aimRate 把冲刺方向逐渐转到目标身上，之后**锁定方向**。
+// 追踪阶段让指示带先指向玩家（冲刺不至于白放），锁定阶段留出明确的躲避窗口。
+// 画在地面上的指示带读的就是 e.skillDirX/Y，冲刺也用它 —— 两者天然一致（锁定后一起停住）。
+function aimBossCharge(e, target, dt) {
+  if (!target) return;
+  const dx = target.x - e.x, dy = target.y - e.y;
+  if (Math.hypot(dx, dy) < 1) return;
+  const want = Math.atan2(dy, dx);
+  if (!e.skillDirX && !e.skillDirY) {              // 首次冲刺：直接朝向目标
+    e.skillDirX = Math.cos(want);
+    e.skillDirY = Math.sin(want);
+    return;
+  }
+  // 追踪窗口结束 → 方向锁定（前摇越短，窗口也越短）
+  const wind = e.chargeWind || BOSS_SKILL.chargeTime;
+  if (wind - e.skillT >= wind * BOSS_SKILL.trackFrac) return;
+  let cur = Math.atan2(e.skillDirY, e.skillDirX);
+  let diff = want - cur;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  const maxTurn = BOSS_SKILL.aimRate * dt;
+  cur += Math.max(-maxTurn, Math.min(maxTurn, diff));
+  e.skillDirX = Math.cos(cur);
+  e.skillDirY = Math.sin(cur);
+}
+
+// 一次冲刺实际能走的距离：撞到世界边界就缩短（与位移时的 clampBossWorld 一致）。
+// 指示带的长度也用它，这样箭头尖端画在哪儿，首领就停在哪儿。
+function bossDashReach(e, ax, ay) {
+  const want = BOSS_SKILL.dashSpeed * BOSS_SKILL.dashTime;
+  let lim = want;
+  const pad = 2;
+  if (ax > 1e-4) lim = Math.min(lim, (WORLD.w - e.r - pad - e.x) / ax);
+  else if (ax < -1e-4) lim = Math.min(lim, (e.r + pad - e.x) / ax);
+  if (ay > 1e-4) lim = Math.min(lim, (WORLD.h - e.r - pad - e.y) / ay);
+  else if (ay < -1e-4) lim = Math.min(lim, (e.r + pad - e.y) / ay);
+  return Math.max(0, lim);
+}
+
+// 蓄力结束 → 真的冲出去（方向沿用蓄力期间瞄准好的 e.skillDirX/Y）
+function startBossDash(e, target) {
+  if (!e.skillDirX && !e.skillDirY) {              // 兜底：没有瞄准数据时朝目标
+    const a = target ? Math.atan2(target.y - e.y, target.x - e.x) : Math.random() * Math.PI * 2;
+    e.skillDirX = Math.cos(a);
+    e.skillDirY = Math.sin(a);
+  }
+  e.skillState = 'idle';
+  e.dashSpd = bossDashReach(e, e.skillDirX, e.skillDirY) / BOSS_SKILL.dashTime;
+  e.dashT = BOSS_SKILL.dashTime;
+  e.dashDamage = BOSS_SKILL.damage;
+  e.dashKind = 'charge';
+  e.skillHit = new Set();
+  sfxExplode();
+  shake = Math.min(10, shake + 3);
+}
+
+// 位移结束：冲锋要结算落点震波，并决定要不要接下一段连冲
+function onBossDashEnd(e) {
+  const kind = e.dashKind;
+  e.dashDamage = 0;
+  e.dashKind = '';
+  if (kind !== 'charge') return;
+  bossShockwave(e);
+  if (e.phase2 && e.chargeCombo < 2) {                 // 二阶段：最多三段连冲
+    e.chargeCombo++;
+    enterBossCharge(e, BOSS_SKILL.chargeTime * 0.45);  // 后续段前摇缩短
+  } else {
+    e.chargeCombo = 0;
+    e.skillCd = BOSS_SKILL.cooldown;
+  }
+}
+
+// 冲锋落点震波：冲刺结束原地炸一圈，逼玩家不要在落点站桩
+function bossShockwave(e) {
+  spawnBlast(e.x, e.y, BOSS_SHOCK.r * 0.8);
+  spawnParticles(e.x, e.y, '#ff9d3b', 16);
+  sfxExplode();
+  shake = Math.min(10, shake + 3);
+  const hit = soldiers.find(s => Math.hypot(s.x - e.x, s.y - e.y) < BOSS_SHOCK.r + S.soldierR);
+  if (hit) damageSoldier(hit, BOSS_SHOCK.dmg * difficulty);
+}
+
+function enterBossPhase2(e) {
+  e.phase2 = true;
+  shake = Math.min(12, shake + 6);
+  spawnParticles(e.x, e.y, '#ffd54f', 28);
+  showBanner('BOSS 狂暴化！', 1.6);
+  sfxExplode();
+  if (e.kind === 'splitter') spawnMinionsAround(e, 'elite', 2);      // 分裂者：再裂出两个精英
+  else if (e.kind === 'summoner') spawnMinionsAround(e, 'fast', 4);
+  else if (e.kind === 'charge') enterBossCharge(e, BOSS_SKILL.chargeTime * 0.5);  // 冲锋者：立刻起手
+  else if (e.kind === 'barrage') e.burstCd = 0.4;                    // 弹幕者：立刻开一轮
+}
+
+// 冲锋者：蓄力 → 冲刺（二阶段三段连冲）→ 落点震波
+function updateChargeBoss(e, target, dt) {
+  e.skillCd -= dt;
+  if (e.skillCd <= 0) enterBossCharge(e, BOSS_SKILL.chargeTime);
+}
+
+// 召唤者：在玩家附近画召唤阵读条（0.9s 预警）后冒出小怪
+function updateSummonerBoss(e, target, dt) {
+  // （V1.25.1 停用）玩家贴近 150 内时闪现到距玩家 340 的另一侧。
+  // 理由：纯挪位置、无伤害，瞬移表现为「突然消失再出现」，不易读；代码保留以便恢复。
+  // const d = Math.hypot(target.x - e.x, target.y - e.y);
+  // if (e.blinkCd <= 0 && d < 150) {
+  //   const a = Math.atan2(e.y - target.y, e.x - target.x) + (Math.random() - 0.5) * 1.4;
+  //   spawnParticles(e.x, e.y, '#16a085', 16);
+  //   e.x = target.x + Math.cos(a) * BOSS_BLINK.r;
+  //   e.y = target.y + Math.sin(a) * BOSS_BLINK.r;
+  //   clampBossInWorld(e);
+  //   spawnParticles(e.x, e.y, '#16a085', 16);
+  //   e.blinkCd = BOSS_BLINK.cd;
+  //   e.orbitFlipT = 1;                                  // 换个绕行方向，免得刚落地又绕回去
+  //   return;
+  // }
+  e.sumCd -= dt;
+  if (e.sumCd <= 0) {
+    e.sumCd = e.phase2 ? 3.8 : 5.4;
+    e.castType = 'summon';
+    e.castT = BOSS_SUMMON.wind;
+    const a = Math.random() * Math.PI * 2, rr = Math.random() * 120;
+    e.castX = Math.max(40, Math.min(WORLD.w - 40, target.x + Math.cos(a) * rr));
+    e.castY = Math.max(40, Math.min(WORLD.h - 40, target.y + Math.sin(a) * rr));
+    spawnParticles(e.castX, e.castY, '#4dd07a', 8);
+  }
+}
+
+// 召唤阵落成：从阵里冒出小怪，并给它们套一层护盾（随 difficulty 缩放）
+function resolveBossCast(e) {
+  if (e.castType !== 'summon') return;
+  e.castType = '';
+  const n = e.phase2 ? 3 : 2;
+  const gain = 18 * difficulty;
+  for (let i = 0; i < n; i++) {
+    const type = Math.random() < 0.5 ? 'grunt' : 'fast';
+    const a = Math.random() * Math.PI * 2, rr = Math.random() * BOSS_SUMMON.r * 0.65;
+    const before = enemies.length;
+    spawnEnemy(type, e.castX + Math.cos(a) * rr, e.castY + Math.sin(a) * rr);
+    for (let j = before; j < enemies.length; j++) {
+      const o = enemies[j];
+      o.shieldMax = Math.min(o.maxHp * 0.5, o.shieldMax + gain);
+      o.shield = o.shieldMax;
+    }
+  }
+  spawnBlast(e.castX, e.castY, BOSS_SUMMON.r * 0.8);
+  spawnParticles(e.castX, e.castY, '#4dd07a', 18);
+  sfxExplode();
+  shake = Math.min(10, shake + 2);
+}
+
+// 分裂者：向前突进撕咬（带伤害的位移）；血量每掉一档还会裂出一只分身（见 tryBossSplitOff）
+function updateSplitterBoss(e, target, dt) {
+  e.skillCd -= dt;
+  if (e.skillCd > 0) return;
+  const d = Math.hypot(target.x - e.x, target.y - e.y);
+  // 已经贴到身上（接触伤害范围内）就不必突进，1.2s 后再判断。
+  // V1.26.2：阈值从 e.r + 70（116）改成真正的接触距离（66）—— 它自己就停在 orbitR = 110，
+  // 旧阈值把它一直判成「贴脸」，撕咬从来没触发过。
+  if (d <= e.r + S.soldierR + CONTACT_PAD) { e.skillCd = 1.2; return; }
+  e.skillCd = e.phase2 ? 3.2 : 4.6;
+  const a = Math.atan2(target.y - e.y, target.x - e.x);
+  e.skillDirX = Math.cos(a);
+  e.skillDirY = Math.sin(a);
+  e.dashSpd = BOSS_BITE.speed;
+  e.dashT = BOSS_BITE.time;
+  e.dashDamage = BOSS_BITE.dmg;
+  e.dashKind = 'bite';
+  e.skillHit = new Set();
+}
+
+// 分裂者的被动：血量每损失一档（80% / 60%）原地裂出一只低血分身，上限 2 只（避免越打越多）
+function tryBossSplitOff(e) {
+  if (e.splitLeft <= 0) return;
+  if (e.hp > e.maxHp * e.splitAt) return;
+  e.splitLeft--;
+  e.splitAt -= 0.2;
+  const a = Math.random() * Math.PI * 2, d = e.r + 50;
+  spawnEnemy('elite', e.x + Math.cos(a) * d, e.y + Math.sin(a) * d, { affixes: [], hpMul: 0.5 });
+  spawnParticles(e.x, e.y, '#d35400', 14);
+}
+
+// 弹幕者技能模组：环形弹幕 → 瞄准扇射 → 螺旋扫射 → 弹幕墙（V1.25：弹幕墙提前到一阶段）
+// 二阶段追加第 5 招「交叉双螺旋」
 function updateBarrageBoss(e, target, dt) {
-  // 螺旋扫射进行中：连续甩出旋转弹幕
+  // 螺旋扫射进行中：连续甩出旋转弹幕（双螺旋 = 同时甩出一股反向的）
   if (e.spiralT > 0) {
     e.spiralT -= dt;
     e.spiralFireT = (e.spiralFireT || 0) - dt;
@@ -3040,37 +3954,76 @@ function updateBarrageBoss(e, target, dt) {
       e.spiralFireT = 0.13;
       e.spiral = (e.spiral || 0) + 0.5;
       fireBossRing(e, 4, 170, 7, e.spiral);
+      if (e.spiralDual) fireBossRing(e, 4, 170, 7, -e.spiral);
     }
   }
 
   e.burstCd -= dt;
   if (e.burstCd > 0) return;
 
-  e.skillIdx = ((e.skillIdx || 0) + 1) % (e.phase2 ? 4 : 3);
+  e.skillIdx = ((e.skillIdx || 0) + 1) % (e.phase2 ? 5 : 4);
+  e.spiralDual = false;
+  let instant = false;                                       // 是否是「瞬发技」（可以接后跃；后跃停用后暂无人读取，保留以便恢复）
   if (e.skillIdx === 0) {
     fireBossRing(e, e.phase2 ? 14 : 10, 175, 9, 0);          // 环形弹幕
     spawnParticles(e.x, e.y, '#c08bff', 12);
     e.burstCd = e.phase2 ? 1.6 : 2.4;
+    instant = true;
   } else if (e.skillIdx === 1) {
     fireBossFan(e, target, e.phase2 ? 7 : 5, 0.22, 200, 10); // 瞄准扇射
     e.burstCd = e.phase2 ? 1.5 : 2.3;
+    instant = true;
   } else if (e.skillIdx === 2) {
     e.spiralT = e.phase2 ? 1.6 : 1.2;                        // 螺旋扫射（持续输出）
     e.spiralFireT = 0;
     e.burstCd = e.phase2 ? 3.4 : 4.4;
+  } else if (e.skillIdx === 3) {
+    fireBarrageWall(e);                                      // 弹幕墙（V1.25：一阶段即开放）
+    e.burstCd = e.phase2 ? 3.0 : 3.8;
+    instant = true;
   } else {
-    fireBarrageWall(e);                                      // 二阶段专属：弹幕墙
+    e.spiralT = 1.8;                                         // 二阶段专属：交叉双螺旋
+    e.spiralFireT = 0;
+    e.spiralDual = true;
     e.burstCd = 3.6;
   }
+
+  // （V1.25.1 停用）放完瞬发技若玩家贴太近，会后跃 180 拉开距离。
+  // 理由：纯挪位置、无伤害，与召唤者闪现同理，不易读；代码保留以便恢复（配套的 bossLeap 也一并没有删）。
+  // const orbitR = (BOSS_KINDS.barrage || {}).orbitR || 300;
+  // if (instant && Math.hypot(target.x - e.x, target.y - e.y) < orbitR * 0.7) {
+  //   bossLeap(e, Math.atan2(e.y - target.y, e.x - target.x), 180);
+  // }
 }
 
 function updateEnemies(dt) {
   for (const e of enemies) {
-    if (e.burnT > 0) {
-      e.hp -= e.burnDps * dt;
-      e.burnT -= dt;
+    const burn = burnTotalDps(e);
+    if (burn > 0) {
+      e.hp -= burn * dt;
+      if (e.burnT > 0) e.burnT = Math.max(0, e.burnT - dt);
+      if (e.burnExtra && e.burnExtra.length) {
+        for (const b of e.burnExtra) b.t -= dt;
+        e.burnExtra = e.burnExtra.filter(b => b.t > 0);
+      }
       if (e.hp <= 0) { killEnemy(e); continue; }
     }
+
+    // 割裂（镰刀）：每秒结算一次 DoT，不进任何伤害乘区
+    if (e.bleedT > 0) {
+      e.hp -= (e.bleedDps || 0) * dt;
+      e.bleedT = Math.max(0, e.bleedT - dt);
+      if (e.bleedT <= 0) e.bleedDps = 0;
+      if (e.hp <= 0) { killEnemy(e); continue; }
+    }
+
+    // 剑印（飞剑）：计时递减，归零后不再提供易伤
+    if (e.markT > 0) e.markT = Math.max(0, e.markT - dt);
+
+    // 状态抗性递减（点燃 / 减速 / 冰冻三类各自独立）
+    if (e.resistBurnT > 0) e.resistBurnT = Math.max(0, e.resistBurnT - dt);
+    if (e.resistFrostT > 0) e.resistFrostT = Math.max(0, e.resistFrostT - dt);
+    if (e.resistFreezeT > 0) e.resistFreezeT = Math.max(0, e.resistFreezeT - dt);
 
     // 霜冻减速 / 冰冻计时
     if (e.frostT > 0) {
@@ -3080,6 +4033,7 @@ function updateEnemies(dt) {
     if (e.freezeT > 0) e.freezeT = Math.max(0, e.freezeT - dt);
 
     // 击退平滑位移 + 衰减 + 抗性计时
+    if (e.devStatic) { e.kbx = 0; e.kby = 0; }                     // 调试：站桩敌人不吃击退
     e.x += e.kbx * dt;
     e.y += e.kby * dt;
     const damp = Math.max(0, 1 - 6 * dt);
@@ -3113,7 +4067,7 @@ function updateEnemies(dt) {
       const b = nearestSoldier(e.x, e.y);
       if (b) {
         moveEnemy(e, b, dt);
-        if (Math.hypot(b.x - e.x, b.y - e.y) < e.r + S.soldierR + 6) { enemyExplode(e); continue; }
+        if (Math.hypot(b.x - e.x, b.y - e.y) < e.r + S.soldierR + CONTACT_PAD) { enemyExplode(e); continue; }
       }
     } else if (e.type === 'hunter' && t) {
       // 追踪弹：保持距离并发射缓慢追踪弹
@@ -3158,7 +4112,7 @@ function updateEnemies(dt) {
       e.atkCd -= dt;
       if (target !== squad) {
         const d = Math.hypot(e.x - target.x, e.y - target.y);
-        if (d < e.r + S.soldierR && e.atkCd <= 0) {
+        if (d < e.r + S.soldierR + CONTACT_PAD && e.atkCd <= 0) {
           damageSoldier(target, e.dmg);
           e.atkCd = 1.0;
         }
@@ -3194,92 +4148,51 @@ function updateEnemies(dt) {
         e.sumCd = def.summonInterval;
         spawnMinionsAround(e, Math.random() < 0.6 ? 'grunt' : 'fast', 1 + (difficulty > 1.5 ? 1 : 0));
       }
+    } else if (e.type === 'elite') {
+      // 精英：本体就是普通近战怪，威胁全在词缀上
+      moveEnemy(e, target, dt);
+      e.atkCd -= dt;
+      if (target !== squad && !e.devPeaceful) {
+        const d = Math.hypot(e.x - target.x, e.y - target.y);
+        if (d < e.r + S.soldierR + CONTACT_PAD && e.atkCd <= 0) {
+          damageSoldier(target, e.dmg);
+          e.atkCd = 1.0;
+        }
+      }
+      // 狂暴词缀：血量降到一半后移速与伤害 +50%
+      if (e.affixBerserk && !e.berserkOn && e.hp <= e.maxHp * 0.5) {
+        e.berserkOn = true;
+        e.speed *= 1.5;
+        e.dmg *= 1.5;
+        spawnParticles(e.x, e.y, '#ff6b4a', 14);
+        shake = Math.min(8, shake + 2);
+      }
+      // 守卫词缀：周期性给附近小怪套小护盾
+      if (e.affixWard) {
+        e.wardCd -= dt;
+        if (e.wardCd <= 0) {
+          e.wardCd = ELITE_WARD_INTERVAL;
+          const gain = ELITE_WARD_AMOUNT * difficulty;
+          let given = 0;
+          for (const o of enemies) {
+            if (o === e || o.dead || o.shieldMax >= o.maxHp * 0.4) continue;
+            if (Math.hypot(o.x - e.x, o.y - e.y) > ELITE_WARD_R) continue;
+            o.shieldMax = Math.min(o.maxHp * 0.4, o.shieldMax + gain);
+            o.shield = Math.min(o.shieldMax, o.shield + gain);
+            given++;
+            if (given >= 4) break;
+          }
+          if (given > 0) spawnParticles(e.x, e.y, '#7fd8ff', 8);
+        }
+      }
     } else if (e.type === 'boss') {
-      // 二阶段：血量降到一半后狂暴
-      if (!e.phase2 && e.hp <= e.maxHp * 0.5) {
-        e.phase2 = true;
-        shake = Math.min(12, shake + 6);
-        spawnParticles(e.x, e.y, '#ffd54f', 28);
-        showBanner('BOSS 狂暴化！', 1.6);
-        sfxExplode();
-        if (e.kind === 'splitter') {
-          spawnMinionsAround(e, 'elite', 2);            // 分裂者：分裂出两个精英
-        } else if (e.kind === 'summoner') {
-          spawnMinionsAround(e, 'fast', 4);
-        } else if (e.kind === 'charge') {
-          e.skillCd = 0.5;                              // 冲锋者：立刻开始蓄力
-        }
-      }
-
-      if (e.skillState === 'charge') {
-        // 蓄力：原地不动，地面显示冲刺指示条
-        e.skillT -= dt;
-        if (e.skillT <= 0) {
-          e.skillState = 'dash';
-          e.skillT = BOSS_SKILL.dashTime;
-          e.skillHit = new Set();
-          sfxExplode();
-          shake = Math.min(10, shake + 3);
-        }
-      } else if (e.skillState === 'dash') {
-        // 冲刺：高速前进并撞击小兵
-        e.skillT -= dt;
-        const step = BOSS_SKILL.dashSpeed * dt;
-        e.x = Math.max(e.r, Math.min(WORLD.w - e.r, e.x + e.skillDirX * step));
-        e.y = Math.max(e.r, Math.min(WORLD.h - e.r, e.y + e.skillDirY * step));
-        spawnParticles(e.x, e.y, '#ff9d3b', 2);
-        // 共享血池：一次冲刺只结算一次伤害（不随命中人数翻倍）
-        if (!e.skillHit.has('squad')) {
-          const hit = soldiers.find(s => Math.hypot(s.x - e.x, s.y - e.y) < e.r + S.soldierR);
-          if (hit) { e.skillHit.add('squad'); damageSoldier(hit, BOSS_SKILL.damage * difficulty); }
-        }
-        if (e.skillT <= 0) { e.skillState = 'idle'; e.skillCd = BOSS_SKILL.cooldown; }
-      } else {
-        moveEnemy(e, target, dt);
-        e.atkCd -= dt;
-        if (target !== squad) {
-          const d = Math.hypot(e.x - target.x, e.y - target.y);
-          if (d < e.r + S.soldierR && e.atkCd <= 0) {
-            damageSoldier(target, e.dmg);
-            e.atkCd = 1.0;
-          }
-        }
-        if (e.kind === 'barrage') {
-          updateBarrageBoss(e, target, dt);                  // 弹幕者：技能轮换模组
-        } else {
-          e.burstCd -= dt;
-          if (e.burstCd <= 0) {
-            fireBossBurst(e);
-            e.burstCd = e.kind === 'summoner' ? 3.5 : (e.phase2 ? 2 : 2.5);
-          }
-        }
-        if (e.kind === 'summoner') {
-          // 召唤者：周期性召唤小怪
-          e.sumCd -= dt;
-          if (e.sumCd <= 0) {
-            e.sumCd = e.phase2 ? 3.5 : 5;
-            spawnMinionsAround(e, Math.random() < 0.5 ? 'grunt' : 'fast', e.phase2 ? 3 : 2);
-          }
-        }
-        if (e.kind === 'charge') {
-          e.skillCd -= dt;
-          if (e.skillCd <= 0) {
-            const dx = target.x - e.x, dy = target.y - e.y;
-            const l = Math.hypot(dx, dy);
-            const a = l > 1 ? Math.atan2(dy, dx) : Math.random() * Math.PI * 2;
-            e.skillDirX = Math.cos(a);
-            e.skillDirY = Math.sin(a);
-            e.skillState = 'charge';
-            e.skillT = BOSS_SKILL.chargeTime;
-          }
-        }
-      }
+      updateBoss(e, target, dt);
     } else {
       moveEnemy(e, target, dt);
       e.atkCd -= dt;
-      if (target !== squad) {
+      if (target !== squad && !e.devPeaceful) {
         const d = Math.hypot(e.x - target.x, e.y - target.y);
-        if (d < e.r + S.soldierR && e.atkCd <= 0) {
+        if (d < e.r + S.soldierR + CONTACT_PAD && e.atkCd <= 0) {
           damageSoldier(target, e.dmg);
           e.atkCd = 1.0;
         }
@@ -3385,7 +4298,11 @@ function damageSoldier(s, dmg) {
   squadHp -= dmg;                                   // 伤害统一进共享血池
   spawnDamageNumber(s.x, s.y - S.soldierR, dmg, '#ff5555');
   sfxHurt();
-  if (stats.invulnDuration > 0) squad.invulnT = stats.invulnDuration;
+  // 受伤免疫：冷却好了才触发，触发后同时进入免疫与冷却（冷却从触发时刻起算）
+  if (stats.invulnDuration > 0 && squad.invulnCdT <= 0) {
+    squad.invulnT = stats.invulnDuration;
+    squad.invulnCdT = INVULN_CD;
+  }
   spawnParticles(s.x, s.y, '#ff5555', 4);
   dropSoldiersToFitPool();                          // 血池不足一格就少一个小人
 }
@@ -3415,10 +4332,32 @@ function spawnScale() {
   if (bossKills >= 1) s += 0.10 + 0.05 * Math.max(0, wave - 10);
   return s;
 }
-// 小怪血量倍率：第一个 Boss 之后才开始随波次成长（Boss 自身另有难度成长）
+// 小怪血量倍率（V1.11 加强）：分三段成长
+//   前期（未击败首个 Boss）：随波次温和成长，不再是一路平推的固定血量
+//   中期（已击败首个 Boss）：波次线性项 + 每个 Boss 的固定抬升
+//   后期：叠加二次项 0.008·m²，追上玩家乘区（多张卡相乘）的成长速度
 function enemyHpScale() {
-  if (bossKills < 1) return 1;
-  return 1 + 0.05 * Math.max(0, wave - 10) + 0.25 * (bossKills - 1);
+  const w = Math.max(0, wave - 1);
+  let s = 1 + 0.06 * w;
+  if (bossKills >= 1) {
+    const m = Math.max(0, wave - 10);
+    s += 0.10 * m + 0.55 * (bossKills - 1) + 0.008 * m * m;
+  }
+  return s;
+}
+// 小怪伤害倍率（V1.11 加强）：与 difficulty 相乘，随波次温和成长（避免后期血量涨了伤害没涨）
+function enemyDmgScale() {
+  let s = 1 + 0.015 * Math.max(0, wave - 1);
+  if (bossKills >= 1) s += 0.025 * Math.max(0, wave - 10) + 0.10 * (bossKills - 1);
+  return s;
+}
+// 首领血量倍率（V1.11 大幅加强）：第 1 个首领为基准，之后每个 +100%（后期血量是旧版的数倍）
+function bossHpScale() { return 1 + bossKills; }
+// 单只小怪的最终基础血量（精英 / 树怪走折半曲线，见 HEAVY_HP_CURVE）
+function scaledEnemyHp(t) {
+  const s = enemyHpScale();
+  const heavy = HEAVY_HP_CURVE[t];
+  return ENEMY_TYPES[t].hp * (heavy ? 1 + (s - 1) * heavy : s);
 }
 
 function collectXp(v) {
@@ -3426,43 +4365,60 @@ function collectXp(v) {
   if (xp >= xpToNext) {
     xp -= xpToNext;
     level++;
-    xpToNext = Math.floor(xpToNext * 1.25 + 5);
+    xpToNext = Math.floor(xpToNext * 1.32 + 6);
     openUpgrade();
   }
 }
 
+// 波次推进（V1.18 改）：**固定时长**驱动，不再等「本波刷完 + 场上清空」。
+//   · 每波 `WAVE_TIME` 秒，到点即 wave++ 并重算出怪节奏，**不看场上还剩多少**；
+//   · 出怪走纯速率：波次越深间隔越短（`spawnInterval()`），刷到同屏上限 `MAX_ALIVE` 就先停手。
+//     旧版「清空才进下一波」会把节奏完全交给玩家的清怪速度（清得快越推越快、清不干净就永远卡住），
+//     现在节奏由时间决定，玩家强度体现在「能不能压住不断累积的怪」；
+//   · **首领存活 / 场地封锁期间波次计时暂停**：否则上一只首领还没死就会刷出下一只，
+//     两个竞技场还会互相覆盖。
+const WAVE_TIME = 20;      // 每波时长（秒）
+const MAX_ALIVE = 180;     // 同屏敌人上限：到顶就先停刷，等玩家清掉一批再继续（防止后期堆积到卡顿）
+
+// 出怪间隔：随波次线性收紧（`4.8 / pace`），`spawnScale()`（Boss 数）再乘一档加速（封顶 2 倍）；
+// 下限 0.10s。标定后每波出怪量约为：波 1 ≈ 4 只、波 10 ≈ 17、波 20 ≈ 55、波 30 ≈ 93、波 50 ≈ 151。
+// 基数 4.8 是按「12 局自动走位的存活测试」扫出来的：与旧版清场制（平均存活 127s / 等级 6.7 /
+// 同屏峰值 13）基本持平（125s / 6.7 / 12），既去掉了「等清场」的死节奏，难度又没有额外飙升。
+function spawnInterval() {
+  const pace = (1 + 0.35 * (wave - 1)) * Math.min(2.0, spawnScale());
+  return Math.max(0.10, 4.8 / pace);
+}
+
 function updateSpawning(dt) {
-  if (waveSpawned >= waveSize) {
-    if (enemies.length === 0) {
+  const bossAlive = !!bossArena || enemies.some(e => e.type === 'boss');
+
+  if (!bossAlive && !devFreezeWave) {          // 调试：冻结波次计时（勾选后不再自动推进波次）
+    waveT += dt;
+    if (waveT >= WAVE_TIME) {
+      waveT -= WAVE_TIME;
       wave++;
-      waveSize = Math.round((5 + wave * 2) * spawnScale());   // 出怪量随 Boss 数增长
-      waveSpawned = 0;
-      spawnTimer = 0.6;
+      if (wave % 10 === 0) spawnEnemy('boss');                 // 第 10 / 20 / 30… 波：开局就上首领
+      else if (wave % 5 === 0) spawnEliteGroup(eliteGroupSize());  // 第 5 / 15 / 25… 波：开局上一群精英
     }
-    return;
   }
 
   spawnTimer -= dt;
-  if (spawnTimer <= 0) {
-    if (wave % 10 === 0 && waveSpawned === 0) spawnEnemy('boss');
-    else if (wave % 5 === 0 && waveSpawned === 0) spawnEnemy('elite');
-    else spawnEnemy();
-    waveSpawned++;
-    spawnTimer = Math.max(0.2, (0.8 - wave * 0.03) / Math.min(1.6, spawnScale()));
-  }
+  if (spawnTimer > 0 || enemies.length >= MAX_ALIVE) return;
+  spawnEnemy();
+  spawnTimer = spawnInterval();
 }
 
-function spawnEnemy(type, px, py) {
+function spawnEnemy(type, px, py, opts = {}) {
   const m = 50;
   let x, y;
   if (px !== undefined) {
     x = px; y = py;
   } else {
     const side = Math.random();
-    if (side < 0.5) { x = camera.x + Math.random() * W; y = camera.y - m; }
-    else if (side < 0.75) { x = camera.x - m; y = camera.y + Math.random() * H; }
-    else if (side < 0.9) { x = camera.x + W + m; y = camera.y + Math.random() * H; }
-    else { x = camera.x + Math.random() * W; y = camera.y + H + m; }
+    if (side < 0.5) { x = camera.x + Math.random() * viewW(); y = camera.y - m; }
+    else if (side < 0.75) { x = camera.x - m; y = camera.y + Math.random() * viewH(); }
+    else if (side < 0.9) { x = camera.x + viewW() + m; y = camera.y + Math.random() * viewH(); }
+    else { x = camera.x + Math.random() * viewW(); y = camera.y + viewH() + m; }
   }
 
   x = Math.max(10, Math.min(WORLD.w - 10, x));
@@ -3471,32 +4427,127 @@ function spawnEnemy(type, px, py) {
   const t = type || pickType();
   const def = ENEMY_TYPES[t];
 
-  // Boss 种类：每 10 波轮换（冲锋 → 弹幕 → 召唤 → 分裂）
+  // Boss 种类：每 10 波轮换（冲锋 → 弹幕 → 召唤 → 分裂）；调试面板可直接指定 opts.bossKind
   const kind = t === 'boss'
-    ? BOSS_ORDER[Math.max(0, Math.floor(wave / 10 - 1)) % BOSS_ORDER.length]
+    ? (opts.bossKind || BOSS_ORDER[Math.max(0, Math.floor(wave / 10 - 1)) % BOSS_ORDER.length])
     : null;
   const bossDef = kind ? BOSS_KINDS[kind] : null;
 
-  // 血量：第一个 Boss 后小怪基础血量随波次成长（Boss 走自己的种类血量）
-  const hp = (bossDef ? bossDef.hp : def.hp * enemyHpScale()) * difficulty;
-  // 护盾：精英 60% / 护盾兵 50%
-  const shield = t === 'elite' ? Math.round(hp * 0.6) : (t === 'shielder' ? Math.round(hp * 0.5) : 0);
+  // 血量：小怪走 scaledEnemyHp（前 / 中 / 后三段曲线，精英与树怪折半），首领走「种类血量 × bossHpScale」
+  // hpMul 供分裂出的子精英使用（同一套曲线，只按比例缩水）
+  const hp = (bossDef ? bossDef.hp * bossHpScale() : scaledEnemyHp(t)) * (opts.hpMul || 1);
+  // 护盾：护盾兵 50%；精英的护盾改为「护盾词缀」提供（见 AFFIX_DEFS）
+  const shield = t === 'shielder' ? Math.round(hp * 0.5) : 0;
 
-  enemies.push({
+  const e = {
     x, y, hp, maxHp: hp,
     speed: (bossDef ? bossDef.speed : def.speed) * Math.min(1.6, 1 + (difficulty - 1) * 0.5),
-    r: def.r, dmg: def.dmg * difficulty, type: t, kind,
+    r: def.r,
+    // 接触伤害：首领只吃 difficulty（避免与竞技场内的持续贴身叠加过头），小怪再乘波次成长
+    dmg: t === 'boss' ? def.dmg * difficulty : def.dmg * difficulty * enemyDmgScale(),
+    type: t, kind,
     atkCd: 0, shootCd: def.shootInterval || 0, burstCd: t === 'boss' ? 2.5 : 0,
-    burnDps: 0, burnT: 0, scytheT: 0, kbx: 0, kby: 0, kbT: 0,
+    burnDps: 0, burnT: 0, burnExtra: [], scytheT: 0, kbx: 0, kby: 0, kbT: 0,
+    bleedDps: 0, bleedT: 0, execT: -1e9, markT: 0,
     frostT: 0, frostMul: 1, freezeT: 0,
+    resistBurnT: 0, resistFrostT: 0, resistFreezeT: 0,
     shield, shieldMax: shield, shieldRegenT: 0,
     healCd: def.healInterval || 0, giftCd: def.giftInterval || 0, sumCd: t === 'boss' ? 4 : 0,
-    phase2: false, spiral: 0, spiralT: 0, spiralFireT: 0, skillIdx: 0,
-    skillCd: t === 'boss' && kind === 'charge' ? BOSS_SKILL.firstDelay : 0,
-    skillState: 'idle', skillT: 0, skillDirX: 0, skillDirY: 0, skillHit: null,
-  });
+    phase2: false, spiral: 0, spiralT: 0, spiralFireT: 0, spiralDual: false, skillIdx: 0,
+    skillCd: t === 'boss' ? (kind === 'charge' ? BOSS_SKILL.firstDelay : 2) : 0,   // 非冲锋者给 2s 起手缓冲（分裂者靠它）
+    skillState: 'idle', skillT: 0, chargeWind: BOSS_SKILL.chargeTime, skillDirX: 0, skillDirY: 0, skillHit: null,
+    // 首领「灵活性」层（V1.25）：轨道走位 / 短距位移 / 施法读条
+    orbitDir: Math.random() < 0.5 ? 1 : -1, orbitFlipT: 1.5 + Math.random() * 2, moveAng: null,
+    dashT: 0, dashSpd: 0, dashDamage: 0, dashKind: '', chargeCombo: 0,
+    castT: 0, castType: '', castX: 0, castY: 0,   // blinkCd: 2,  ← V1.25.1 停用（召唤者闪现的冷却）
+    splitAt: 0.8, splitLeft: 2,
+    affixes: [], affixSplit: false, affixVolatile: false, affixBerserk: false, affixWard: false,
+    berserkOn: false, wardCd: 0,
+    // 调试标记（V1.26 局内调试面板）：站桩 = 不移动 / 不吃击退，停手 = 不造成任何伤害
+    devStatic: !!opts.devStatic, devPeaceful: !!opts.devPeaceful,
+  };
+  enemies.push(e);
 
-  if (t === 'boss') showBanner(`BOSS · ${BOSS_KINDS[kind].name}`, 2);
+  // 精英：生成时一次性挂上词缀（护盾 / 迅捷 直接改面板，其余在行为与死亡逻辑里生效）
+  if (t === 'elite') {
+    for (const id of (opts.affixes || rollAffixes())) {
+      const a = AFFIX_DEFS[id];
+      if (!a) continue;
+      e.affixes.push(id);
+      a.apply(e);
+    }
+  }
+
+  if (t === 'boss') {
+    openBossArena(e);
+    showBanner(`BOSS · ${BOSS_KINDS[kind].name} · 场地封锁`, 2.4);
+  }
+}
+
+// 精英成群刷新：一波精英从一个屏幕外基准点成簇出现（低压成群定位，见 ENEMY_TYPES.elite）
+// 体量：第 5 波 2 只起，之后每 10 波 +1，封顶 5 只。
+function eliteGroupSize() { return Math.min(5, 2 + Math.floor((wave - 5) / 10)); }
+function spawnEliteGroup(n) {
+  const m = 60;
+  const side = Math.random();
+  let bx, by;
+  if (side < 0.5) { bx = camera.x + Math.random() * viewW(); by = camera.y - m; }
+  else if (side < 0.75) { bx = camera.x - m; by = camera.y + Math.random() * viewH(); }
+  else if (side < 0.9) { bx = camera.x + viewW() + m; by = camera.y + Math.random() * viewH(); }
+  else { bx = camera.x + Math.random() * viewW(); by = camera.y + viewH() + m; }
+  for (let i = 0; i < n; i++) {
+    const a = (Math.PI * 2 / n) * i;
+    spawnEnemy('elite', bx + Math.cos(a) * 70, by + Math.sin(a) * 70);
+  }
+  showBanner(`精英来袭 ×${n}`, 1.6);
+}
+
+// 分裂词缀：死亡时裂成 2 只「无词缀的残血小精英」（不再带分裂，避免无限递归）
+function spawnSplitElites(e) {
+  for (let i = 0; i < 2; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const d = 40 + Math.random() * 30;
+    spawnEnemy('elite', e.x + Math.cos(a) * d, e.y + Math.sin(a) * d, { affixes: [], hpMul: ELITE_SPLIT_HP });
+  }
+  spawnParticles(e.x, e.y, '#c07bff', 16);
+}
+
+// 殉爆词缀：死亡时原地爆炸（与自爆怪同款结算，一次只结算一次伤害）
+function affixExplode(e) {
+  shake = Math.min(10, shake + 3);
+  sfxExplode();
+  spawnBlast(e.x, e.y, ELITE_BOOM_R * 0.8);
+  spawnParticles(e.x, e.y, '#ff9d3b', 18);
+  const hit = soldiers.find(s => Math.hypot(s.x - e.x, s.y - e.y) < ELITE_BOOM_R + S.soldierR);
+  if (hit) damageSoldier(hit, ELITE_BOOM_DMG * difficulty);
+}
+
+// 首领出场：以玩家当前位置为场心划出竞技场，并把首领从屏幕外拉到场内（首领本身不受场地限制）
+function openBossArena(boss) {
+  const r = BOSS_ARENA_R;
+  bossArena = { x: squad.x, y: squad.y, r };
+  // 出场位置按首领相对玩家的方向放到面前，距离取「0.62r」与 220 中的较小值（半径变大后仍要落在视野内）
+  const a = Math.atan2(boss.y - squad.y, boss.x - squad.x);
+  const dist = Math.min(r * 0.62, 220);
+  const bx = squad.x + Math.cos(a) * dist;
+  const by = squad.y + Math.sin(a) * dist;
+  boss.x = Math.max(boss.r, Math.min(WORLD.w - boss.r, bx));
+  boss.y = Math.max(boss.r, Math.min(WORLD.h - boss.r, by));
+  spawnParticles(boss.x, boss.y, '#d64c3a', 18);
+  shake = Math.min(10, shake + 6);
+}
+
+// 把实体限制在首领竞技场内（pad 为该实体的半径，贴边时留出余量）
+// 只在 `updateSquad` 里对玩家调用：首领与小怪不调用，可以自由进出场地
+function clampToBossArena(e, pad) {
+  if (!bossArena) return;
+  const dx = e.x - bossArena.x, dy = e.y - bossArena.y;
+  const d = Math.hypot(dx, dy);
+  const lim = Math.max(0, bossArena.r - (pad || 0));
+  if (d > lim) {
+    e.x = bossArena.x + dx / d * lim;
+    e.y = bossArena.y + dy / d * lim;
+  }
 }
 
 // 在指定敌人周围召唤小兵（召唤兵 / 召唤型 Boss）
@@ -3821,7 +4872,7 @@ function rerollUpgrades() {
 
 function updateRerollButton() {
   const btn = document.getElementById('btn-reroll');
-  btn.textContent = `重掷（剩余 ${rerollLeft} 次）`;
+  btn.textContent = `重掷（剩余 ${rerollLeft} 次 · R）`;
   btn.disabled = rerollLeft <= 0;
 }
 
@@ -3843,22 +4894,24 @@ function pickUpgrades(n) {
   return picked;
 }
 
-function upgradeCardHtml(u) {
+function upgradeCardHtml(u, hotkey) {
   const tag = u.evo ? '<span class="evo-tag">终极进化</span>' : '';
   const text = u.name + ' ' + (u.route || '');
-  const icon = u.evo ? '✦' : /火|焰/.test(text) ? '♨' : /雷|电/.test(text) ? 'ϟ' : /冰|霜/.test(text) ? '❄' : /剑|镰/.test(text) ? '⚔' : /生命|医疗|回复/.test(text) ? '✚' : /枪|弹/.test(text) ? '⌁' : /宠|龙/.test(text) ? '♧' : '◇';
-  return '<span class="card-icon" aria-hidden="true">' + icon + '</span><span class="card-copy">' + tag + '<span class="name">' + u.name + '</span><span class="desc">' + u.desc + '</span></span><span class="card-arrow" aria-hidden="true">›</span>';
+  const icon = u.evo ? '✦' : /火|焰|灼/.test(text) ? '♨' : /雷|电/.test(text) ? 'ϟ' : /冰|霜|冻|凛/.test(text) ? '❄' : /爆/.test(text) ? '✹' : /剑|镰/.test(text) ? '⚔' : /生命|医疗|回复/.test(text) ? '✚' : /枪|弹/.test(text) ? '⌁' : /宠|龙/.test(text) ? '♧' : '◇';
+  // 数字角标：提示「按这个数字键可以直接选这张卡」
+  const key = hotkey ? '<i class="card-key">' + hotkey + '</i>' : '';
+  return '<span class="card-icon" aria-hidden="true">' + icon + key + '</span><span class="card-copy">' + tag + '<span class="name">' + u.name + '</span><span class="desc">' + u.desc + '</span></span><span class="card-arrow" aria-hidden="true">›</span>';
 }
 
 function renderUpgradeCards() {
   document.querySelector('#upgrade .panel').scrollTop = 0;
   const box = document.getElementById('upgrade-cards');
   box.innerHTML = '';
-  upgrades.forEach(u => {
+  upgrades.forEach((u, i) => {
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'card' + (u.evo ? ' evo' : '');
-    el.innerHTML = upgradeCardHtml(u);
+    el.innerHTML = upgradeCardHtml(u, i + 1);
     el.onclick = () => applyUpgrade(u.id);
     box.appendChild(el);
   });
@@ -3875,25 +4928,40 @@ function applyUpgrade(id) {
   state = 'playing';
 }
 
-// Boss 奖励：从 4 项中选 2 项
+// Boss 奖励：候选全部来自首领专属奖励池（不混入普通升级卡），且只选 1 项
 function openBossReward() {
-  bossRewardOptions = [];
-  BOSS_BUFFS.forEach(b => {
-    if (b.req && !b.req()) return;          // 前置不满足（如没有元素伤害来源）则不出现
-    if (Math.random() < 0.6) bossRewardOptions.push(b);
+  const cap = choiceCount;                                         // 面板张数跟随升级选项数（3~6）
+  const pool = BOSS_BUFFS.filter(b => {
+    if (b.repeat) return false;                                     // 可重复卡不参与首轮筛选，只用来补位
+    if (b.req && !b.req()) return false;                            // 前置不满足（如没有元素伤害来源）则不出现
+    if (b.once && appliedIds.has(b.id)) return false;               // 一次性奖励：拿过就不再出现
+    if (b.exclusive && hasExclusivePicked(b.exclusive)) return false; // 二选一奖励：同组已选过则不再出现
+    return true;
   });
-  let guard = 0;
-  while (bossRewardOptions.length < 4 && guard++ < 20) {
-    const u = pickUpgrades(1)[0];
-    if (u && !bossRewardOptions.some(x => x.id === u.id)) bossRewardOptions.push(u);
-  }
-  for (let i = bossRewardOptions.length - 1; i > 0; i--) {
+  for (let i = pool.length - 1; i > 0; i--) {                       // 打乱一次性候选
     const j = Math.floor(Math.random() * (i + 1));
-    [bossRewardOptions[i], bossRewardOptions[j]] = [bossRewardOptions[j], bossRewardOptions[i]];
+    [pool[i], pool[j]] = [pool[j], pool[i]];
   }
-  bossRewardPicked = 0;
+  bossRewardOptions = pool.slice(0, cap);
+  // 一次性奖励会被拿空，此时候选少于面板张数；用可重复的补位卡补满，避免留出空格子。
+  // （补位卡不够时允许在同一面板内重复出现，保证一定填满。）
+  if (bossRewardOptions.length < cap) {
+    const fillers = BOSS_BUFFS.filter(b => b.repeat);
+    for (let i = fillers.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [fillers[i], fillers[j]] = [fillers[j], fillers[i]];
+    }
+    for (let i = 0; bossRewardOptions.length < cap; i++) {
+      bossRewardOptions.push(fillers[i % fillers.length]);
+    }
+  }
+  if (!bossRewardOptions.length) {
+    showBanner('首领奖励已全部获得', 2.2);
+    state = 'playing';
+    return;
+  }
   renderBossRewardCards();
-  document.getElementById('upgrade-title').textContent = 'BOSS 奖励：选择 2 项';
+  document.getElementById('upgrade-title').textContent = 'BOSS 奖励：选择 1 项';
   document.getElementById('btn-reroll').classList.add('hidden');
   document.getElementById('upgrade').classList.remove('hidden');
   state = 'bossreward';
@@ -3903,26 +4971,23 @@ function renderBossRewardCards() {
   document.querySelector('#upgrade .panel').scrollTop = 0;
   const box = document.getElementById('upgrade-cards');
   box.innerHTML = '';
-  bossRewardOptions.forEach(u => {
+  bossRewardOptions.forEach((u, i) => {
     const el = document.createElement('button');
     el.type = 'button';
     el.className = 'card' + (u.evo ? ' evo' : '');
-    el.innerHTML = upgradeCardHtml(u);
-    el.onclick = () => pickBossReward(u, el);
+    el.innerHTML = upgradeCardHtml(u, i + 1);
+    el.onclick = () => pickBossReward(u);
     box.appendChild(el);
   });
 }
 
-function pickBossReward(u, el) {
+function pickBossReward(u) {
   u.apply();
   appliedIds.add(u.id);
   if (u.route) routePicks[u.route] = (routePicks[u.route] || 0) + 1;
-  bossRewardPicked++;
-  el.remove();
-  if (bossRewardPicked >= 2) {
-    document.getElementById('upgrade').classList.add('hidden');
-    state = 'playing';
-  }
+  bossRewardOptions = [];
+  document.getElementById('upgrade').classList.add('hidden');
+  state = 'playing';
 }
 
 // ==================== 渲染 ====================
@@ -3974,7 +5039,7 @@ function buildTerrain() {
 function drawBackground() {
   if (!terrainCache) buildTerrain();
   const x = Math.max(0, camera.x - 12), y = Math.max(0, camera.y - 12);
-  const w = Math.min(W + 24, WORLD.w - x), h = Math.min(H + 24, WORLD.h - y);
+  const w = Math.min(viewW() + 24, WORLD.w - x), h = Math.min(viewH() + 24, WORLD.h - y);
   ctx.drawImage(terrainCache, x, y, w, h, x, y, w, h);
   if (!richEffects()) return;
   // 低对比萤火只作环境点缀，不覆盖敌人的危险预警。
@@ -3993,10 +5058,34 @@ function drawBar(x, y, w, h, ratio, color) {
   ctx.fillRect(x - w / 2, y, w * Math.max(0, Math.min(1, ratio)), h);
 }
 
+// 首领竞技场：地面红环 + 呼吸脉冲，明确「能走到哪里」
+function drawBossArena() {
+  if (!bossArena) return;
+  const { x, y, r } = bossArena;
+  const pulse = reducedMotion.matches ? 0.5 : 0.5 + 0.5 * Math.sin(gameTime * 2.2);
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(208, 70, 58, 0.07)';
+  ctx.fill();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = `rgba(214, 76, 58, ${0.45 + 0.3 * pulse})`;
+  ctx.shadowColor = 'rgba(214, 76, 58, 0.9)';
+  ctx.shadowBlur = 18;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([16, 12]);
+  ctx.lineDashOffset = -gameTime * 24;
+  ctx.strokeStyle = `rgba(255, 176, 120, ${0.3 + 0.3 * pulse})`;
+  ctx.beginPath(); ctx.arc(x, y, r - 13, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawDrops() {
   ctx.save();
   drops.forEach(d => {
-    if (d.x < camera.x - 20 || d.x > camera.x + W + 20 || d.y < camera.y - 20 || d.y > camera.y + H + 20) return;
+    if (d.x < camera.x - 20 || d.x > camera.x + viewW() + 20 || d.y < camera.y - 20 || d.y > camera.y + viewH() + 20) return;
     const r = d.r + 1;
     if (richEffects()) { ctx.fillStyle = '#69d8cd18'; ctx.beginPath(); ctx.arc(d.x,d.y,r*2.5,0,Math.PI*2); ctx.fill(); }
     ctx.fillStyle = '#7dddd0'; ctx.beginPath(); ctx.moveTo(d.x,d.y-r); ctx.lineTo(d.x+r*.75,d.y); ctx.lineTo(d.x,d.y+r); ctx.lineTo(d.x-r*.75,d.y); ctx.closePath(); ctx.fill();
@@ -4268,6 +5357,58 @@ function drawFrost(e) {
     ctx.moveTo(px, py - 3.4); ctx.lineTo(px + 2.4, py); ctx.lineTo(px, py + 3.4); ctx.lineTo(px - 2.4, py);
     ctx.closePath(); ctx.fill();
   }
+  ctx.restore();
+}
+
+// 割裂（镰刀的出血）：暗红血雾 + 滴落的血珠 + 地面血渍
+function drawBleed(e) {
+  const t = gameTime;
+  const seed = (e.x * 0.13 + e.y * 0.07) % 6.283;
+  const fade = Math.min(1, e.bleedT / 0.6);
+  const r = e.r;
+
+  ctx.save();
+  const g = ctx.createRadialGradient(e.x, e.y, r * 0.2, e.x, e.y, r * 1.35);
+  g.addColorStop(0, `rgba(220,40,60,${0.20 * fade})`);
+  g.addColorStop(1, 'rgba(160,20,40,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(e.x, e.y, r * 1.35, 0, Math.PI * 2); ctx.fill();
+
+  // 地面血渍：一直铺在脚下，随时间脉动
+  ctx.fillStyle = `rgba(120,16,28,${(0.24 + 0.08 * Math.sin(t * 4 + seed)) * fade})`;
+  ctx.beginPath(); ctx.ellipse(e.x, e.y + r * 0.85, r * 0.85, r * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+
+  // 滴落的血珠：循环下落，接近地面时淡出
+  for (let i = 0; i < 3; i++) {
+    const lp = (t * 1.1 + i * 0.34 + seed) % 1;
+    const px = e.x + Math.sin(seed + i * 2.1) * r * 0.7;
+    const py = e.y + r * 0.2 + lp * r * 1.1;
+    ctx.fillStyle = `rgba(235,60,80,${(1 - lp) * 0.9 * fade})`;
+    ctx.beginPath(); ctx.arc(px, py, 2.0 * (1 - lp * 0.5) + 0.5, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// 剑印：敌人身上一圈青色剑环 + 头顶悬浮的剑形印记（旋转 + 呼吸）
+function drawSwordMark(e) {
+  const t = gameTime;
+  const fade = Math.min(1, e.markT / 0.5);
+  const s = 1 + 0.08 * Math.sin(t * 5);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  // 身上的剑环：让「被标记」在怪群里一眼可辨
+  ctx.strokeStyle = `rgba(150,225,255,${(0.34 + 0.14 * Math.sin(t * 4)) * fade})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(e.x, e.y + e.r * 0.75, e.r * 1.25, e.r * 0.45, 0, 0, Math.PI * 2); ctx.stroke();
+  // 头顶印记
+  ctx.translate(e.x, e.y - e.r - 16 + Math.sin(t * 3) * 2);
+  ctx.rotate(Math.sin(t * 1.6) * 0.5);
+  ctx.scale(s, s);
+  ctx.fillStyle = `rgba(190,240,255,${0.9 * fade})`;
+  ctx.beginPath();                                   // 剑身（细长菱形）
+  ctx.moveTo(0, -9); ctx.lineTo(2.4, -2); ctx.lineTo(0, 7); ctx.lineTo(-2.4, -2);
+  ctx.closePath(); ctx.fill();
+  ctx.fillRect(-5, -1, 10, 1.8);                     // 护手
   ctx.restore();
 }
 
@@ -4744,13 +5885,37 @@ function drawPet() {
   drawPetModel(ctx, p.x, p.y, 11, gameTime, pet.type, { flash: pet.flashT > 0 });
 }
 
-// Boss 冲刺地面指示 + 读条
+// Boss 地面指示 + 读条（V1.25：冲刺蓄力 / 召唤阵 / 位移拖影）
 function drawBossTelegraph() {
   for (const e of enemies) {
     if (e.type !== 'boss') continue;
+
+    // 召唤阵：先画预警圈，读条结束才冒怪（位置提前告知，可以提前走开或准备清场）
+    if (e.castT > 0) {
+      const prog = Math.min(1, Math.max(0, 1 - e.castT / BOSS_SUMMON.wind));
+      const hot = prog > 0.72;
+      ctx.save();
+      ctx.fillStyle = `rgba(77,208,122,${0.10 + prog * 0.22})`;
+      ctx.beginPath(); ctx.arc(e.castX, e.castY, BOSS_SUMMON.r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = hot ? 'rgba(160,255,190,0.95)' : 'rgba(77,208,122,0.75)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(e.castX, e.castY, BOSS_SUMMON.r, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(e.castX, e.castY, BOSS_SUMMON.r * prog, 0, Math.PI * 2); ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+      ctx.fillStyle = hot ? '#c8ffd8' : '#8fe8a8';
+      ctx.strokeText('召唤阵', e.castX, e.castY - BOSS_SUMMON.r - 6);
+      ctx.fillText('召唤阵', e.castX, e.castY - BOSS_SUMMON.r - 6);
+      ctx.restore();
+    }
+
     if (e.skillState === 'charge') {
-      const prog = Math.min(1, Math.max(0, 1 - e.skillT / BOSS_SKILL.chargeTime));
-      const len = BOSS_SKILL.dashSpeed * BOSS_SKILL.dashTime;
+      const wind = e.chargeWind || BOSS_SKILL.chargeTime;         // 连冲的后续段前摇更短
+      const prog = Math.min(1, Math.max(0, 1 - e.skillT / wind));
+      // 指示带长度 = 这次冲刺真实能走的距离（撞边界 / 场地限制会缩短），箭头尖端就是落点
+      const len = bossDashReach(e, e.skillDirX, e.skillDirY);
       const w = e.r * 2.4;
       const hot = prog > 0.72;                                  // 临近释放：警示加强
       const pulse = hot ? 0.5 + 0.5 * Math.sin(gameTime * 26) : 0;
@@ -4821,23 +5986,26 @@ function drawBossTelegraph() {
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(0,0,0,0.75)';
       ctx.fillStyle = hot ? '#ff8a5c' : '#ffd98a';
-      const txt = hot ? '即将冲刺！' : '冲刺蓄力';
+      const txt = hot ? '即将冲刺！' : (e.chargeCombo > 0 ? `连冲 ${e.chargeCombo + 1}/3` : '冲刺蓄力');
       ctx.strokeText(txt, e.x, by - 5);
       ctx.fillText(txt, e.x, by - 5);
       ctx.restore();
-    } else if (e.skillState === 'dash') {
-      // 冲刺中：拖影 + 冲击环
+    } else if (e.dashT > 0) {
+      // 位移中：拖影 + 冲击环（冲锋用暖橙，其它位移用淡金，便于区分是不是伤害技）
+      const hotDash = e.dashKind === 'charge';
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (let i = 1; i <= 4; i++) {
         const d = i * e.r * 0.75;
-        ctx.fillStyle = `rgba(255,${170 - i * 25},60,${0.26 - i * 0.05})`;
+        ctx.fillStyle = hotDash
+          ? `rgba(255,${170 - i * 25},60,${0.26 - i * 0.05})`
+          : `rgba(255,215,160,${0.22 - i * 0.045})`;
         ctx.beginPath();
         ctx.arc(e.x - e.skillDirX * d, e.y - e.skillDirY * d, Math.max(2, e.r * (1 - i * 0.14)), 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();
-      ctx.strokeStyle = 'rgba(255,180,90,0.9)';
+      ctx.strokeStyle = hotDash ? 'rgba(255,180,90,0.9)' : 'rgba(255,225,175,0.7)';
       ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 8, 0, Math.PI * 2); ctx.stroke();
     }
@@ -5098,7 +6266,7 @@ function drawEnemies() {
   enemies.forEach(e => {
     if (e.dead) return;
     const def = ENEMY_TYPES[e.type];
-    if (e.x < camera.x - 110 || e.x > camera.x + W + 110 || e.y < camera.y - 110 || e.y > camera.y + H + 110) return;
+    if (e.x < camera.x - 110 || e.x > camera.x + viewW() + 110 || e.y < camera.y - 110 || e.y > camera.y + viewH() + 110) return;
     ctx.fillStyle = '#06191c55'; ctx.beginPath(); ctx.ellipse(e.x + 2, e.y + e.r * .8, e.r * 1.1, e.r * .4, 0, 0, Math.PI * 2); ctx.fill();
     if (e.type === 'elite') {
       ctx.fillStyle = '#8e4fd0';
@@ -5158,13 +6326,17 @@ function drawEnemies() {
     }
 
     // 点燃：身上着火的动态火焰特效
-    if (e.burnT > 0) drawBurning(e);
+    if (burnTotalDps(e) > 0) drawBurning(e);
 
     // 冰刺：霜冻减速 / 冰冻的冰雪特效
     if (e.freezeT > 0) drawIceBlock(e);
     else if (e.frostT > 0) drawFrost(e);
 
-    // 护盾环（精英怪被动）
+    // 镰刀割裂：出血特效；飞剑剑印：头顶印记
+    if (e.bleedT > 0) drawBleed(e);
+    if (e.markT > 0) drawSwordMark(e);
+
+    // 护盾环（护盾词缀 / 护盾兵 / 守卫给的盾）
     if (e.shieldMax > 0 && e.shield > 0) {
       ctx.strokeStyle = 'rgba(120,210,255,0.9)';
       ctx.lineWidth = 3;
@@ -5185,8 +6357,36 @@ function drawEnemies() {
       ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 11, 0, Math.PI * 2); ctx.stroke();
     }
 
+    // 守卫词缀：把光环范围画出来，方便判断该先切谁
+    if (e.affixWard) {
+      ctx.strokeStyle = 'rgba(95,176,208,0.18)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(e.x, e.y, ELITE_WARD_R, 0, Math.PI * 2); ctx.stroke();
+    }
+
     // 树怪整体更高，血条抬到树冠上方
     const barY = e.type === 'treant' ? e.y - e.r * 2.05 - 6 : e.y - e.r - 6;
+
+    // 精英词缀标识：血条上方一排彩色圆点，颜色对应 AFFIX_DEFS
+    if (e.type === 'elite' && e.affixes && e.affixes.length) {
+      const gap = 12;
+      const sx = e.x - (e.affixes.length - 1) * gap / 2;
+      e.affixes.forEach((id, i) => {
+        const a = AFFIX_DEFS[id];
+        if (!a) return;
+        ctx.fillStyle = a.color;
+        ctx.beginPath(); ctx.arc(sx + i * gap, barY - 11, 4.5, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#0b1e24'; ctx.lineWidth = 1.2; ctx.stroke();
+      });
+    }
+
+    // 狂暴词缀触发后：套一层红环（与 Boss 二阶段同款提示）
+    if (e.type === 'elite' && e.berserkOn) {
+      ctx.strokeStyle = 'rgba(255,107,74,0.85)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 7, 0, Math.PI * 2); ctx.stroke();
+    }
+
     drawBar(e.x, barY, e.r * 2, 4, e.hp / e.maxHp, '#f66');
     if (e.shieldMax > 0) {
       drawBar(e.x, barY - 5, e.r * 2, 3, e.shield / e.shieldMax, '#7fd8ff');
@@ -5545,8 +6745,10 @@ function render() {
   const sx = shake > 0 && !reducedMotion.matches ? (Math.random() - 0.5) * shake : 0;
   const sy = shake > 0 && !reducedMotion.matches ? (Math.random() - 0.5) * shake : 0;
   ctx.save();
+  ctx.scale(ZOOM, ZOOM);                    // 镜头拉远：可见的世界范围 = W/ZOOM × H/ZOOM
   ctx.translate(-camera.x + sx, -camera.y + sy);
   drawBackground();
+  drawBossArena();
   drawDrops();
   drawObstacles();
   drawSoldiers();
@@ -5592,6 +6794,7 @@ let fpsAccum = 0;
 
 function update(dt) {
   if (state !== 'playing') return;
+  if (devInvuln) squad.invulnT = Math.max(squad.invulnT, 0.2);   // 调试：无敌（复用受伤免疫）
   gameTime += dt;
   updateSquad(dt);
   updateSoldiers(dt);
@@ -5599,10 +6802,12 @@ function update(dt) {
   if (stats.regen > 0) healSquad(stats.regen * dt);   // 回血宝珠：每秒回血
   updateSkills(dt);
   updateWeapons(dt);
+  updatePendingLightning(dt);   // 延迟落雷
   updateSummons(dt);
   updatePet(dt);
   updateBullets(dt);
   updateEnemies(dt);
+  crushObstaclesByBosses(dt);   // 首领碾碎挡路的建筑 / 撞醒树木（要赶在下面的推出之前）
   resolveEnemyCollisions();   // 敌人也被障碍物挡住
   updateEnemyBullets(dt);
   updateLightningBolts(dt);
@@ -5641,8 +6846,9 @@ function loop(now) {
 
   // 贯穿命中顿帧：极短地冻结逻辑（渲染照常），强化打击感
   if (hitStop > 0) hitStop = Math.max(0, hitStop - dt);
-  else update(dt);
+  else update(dt * devSpeed);          // 调试：devSpeed 为游戏速度倍率（默认 1，不改变正常玩法）
   render();
+  devTickHud(raw / 1000);              // 调试面板：刷新读数 / 信息浮层 / 入口按钮显隐
 
   // 暂停按钮只在可操作的对局中显示（升级 / Boss 奖励面板打开时隐藏）
   const btn = document.getElementById('btn-pause');
@@ -6449,6 +7655,417 @@ document.getElementById('btn-register').onclick = async () => {
 document.getElementById('btn-back').onclick = () => setLoginMode(false);
 document.getElementById('btn-logout').onclick = logout;
 
+// ==================== 局内调试面板（V1.26） ====================
+// 把以前只能开控制台手敲的测试动作做成按钮：调波次、刷 Boss / 精英 / 小怪（可站桩、可停手）、
+// 任选升级卡（默认忽略前置，可切回严格）、玩家侧开关、游戏速度与单步、以及一个实时读数浮层。
+// 只在开发者模式（meta.devMode）下可见；所有开关默认都不改变正常玩法，且每局重开时由 devResetTransient() 复位。
+const DEV_SPEEDS = [0.25, 0.5, 1, 2, 4];
+const DEV_CARD_CATS = [
+  ['all', '全部'], ['basic', '生存功能'], ['weapon', '武器'], ['element', '元素'],
+  ['summon', '召唤'], ['pet', '宠物'], ['evo', '进化'], ['boss', '首领奖励'],
+];
+const DEV_SPAWN_LABELS = {
+  grunt: '普通怪', fast: '快速怪', ranged: '远程怪', elite: '精英', bomber: '自爆怪',
+  hunter: '猎人', healer: '治疗兵', shielder: '护盾兵', summoner: '召唤兵', treant: '树怪',
+  barrel: '木桶', crate: '箱子', pillar: '石柱', tree: '树木',
+};
+let devFps = 60, devReadTick = 0;
+
+function devQ(id) { return document.getElementById(id); }
+function devHudStatus(msg) { const el = devQ('dev-hud-status'); if (el) el.textContent = msg; }
+
+// 新对局：把会影响对局本身的开关复位（面板偏好，如当前分类 / 搜索词，保留）
+function devResetTransient() {
+  devSpeed = 1;
+  devFreezeWave = false;
+  devInvuln = false;
+  devOneShot = false;
+  ['dev-freeze-wave', 'dev-invuln', 'dev-oneshot'].forEach(id => { const el = devQ(id); if (el) el.checked = false; });
+  renderDevSpeedChips();
+}
+
+function devAvailable() { return devModeOn(); }
+
+function setDevHud(open) {
+  devHudOpen = !!open && devAvailable();
+  const el = devQ('dev-hud');
+  if (el) el.classList.toggle('hidden', !devHudOpen);
+  if (devHudOpen) {
+    devSyncControls();
+    devRenderCatChips();
+    devRenderCards();
+    devRefreshReadout();
+    devHudStatus('');
+  }
+}
+
+function toggleDevHud() {
+  if (!devAvailable()) return;
+  setDevHud(!devHudOpen);
+}
+
+// 每帧调用（loop 里）：入口按钮显隐 + 读数刷新 + 信息浮层
+function devTickHud(rawDt) {
+  if (rawDt > 0) devFps = devFps * 0.9 + (1 / rawDt) * 0.1;
+  const usable = devAvailable() && (state === 'playing' || state === 'paused');
+  const tgl = devQ('dev-toggle');
+  if (tgl && tgl.classList.contains('hidden') !== !usable) tgl.classList.toggle('hidden', !usable);
+  if (devHudOpen && !usable) setDevHud(false);           // 回到菜单 / 结算时自动收起
+  if (devInfoOn && !usable) { devInfoOn = false; const el = devQ('dev-info-toggle'); if (el) el.checked = false; }
+  const info = devQ('dev-info-hud');
+  if (info) {
+    if (info.classList.contains('hidden') !== !(devInfoOn && usable)) info.classList.toggle('hidden', !(devInfoOn && usable));
+    info.classList.toggle('pushed', devHudOpen);      // 面板展开时把浮层挪到左下，避免被面板盖住
+  }
+  devReadTick -= rawDt;
+  if (devReadTick > 0) return;
+  devReadTick = 0.2;
+  if (devHudOpen) devRefreshReadout();
+  if (devInfoOn && usable) renderDevInfo();
+}
+
+function devRefreshReadout() {
+  const waveEl = devQ('dev-wave-now');
+  if (!waveEl) return;
+  waveEl.textContent = wave;
+  devQ('dev-wave-t').textContent = `${waveT.toFixed(1)}s / ${WAVE_TIME}s` + (devFreezeWave ? ' · 已冻结' : '');
+  devQ('dev-self-hp').textContent = `${Math.ceil(squadHp)}/${Math.ceil(squadMaxHp)}`;
+  devQ('dev-self-sum').textContent = `LV${level} · 敌 ${enemies.length} · 弹 ${bullets.length}/${enemyBullets.length}`;
+}
+
+function renderDevInfo() {
+  const el = devQ('dev-info-hud');
+  if (!el) return;
+  const boss = enemies.find(e => e.type === 'boss');
+  const bossText = boss
+    ? `${(BOSS_KINDS[boss.kind] || {}).name || boss.kind} ${Math.max(0, Math.round(boss.hp))}/${Math.round(boss.maxHp)}${boss.phase2 ? ' P2' : ''}`
+    : '无';
+  const lines = [
+    `fps ${devFps.toFixed(0)} · 速度 x${devSpeed}`,
+    `波 ${wave} (${waveT.toFixed(1)}/${WAVE_TIME}s) · 时长 ${fmtTime(gameTime)}`,
+    `敌 ${enemies.length} · 弹 ${bullets.length}/${enemyBullets.length} · 召唤 ${summons.length} · 掉落 ${drops.length}`,
+    `血 ${Math.ceil(squadHp)}/${Math.ceil(squadMaxHp)} · LV${level} · Boss ${bossText}`,
+  ];
+  if (devInvuln) lines.push('无敌 ON');
+  if (devOneShot) lines.push('秒杀 ON');
+  if (devFreezeWave) lines.push('波次计时已冻结');
+  el.textContent = lines.join('\n');
+}
+
+// ---- 波次 ----
+function devJumpWave(n) {
+  wave = Math.max(1, Math.min(9999, Math.floor(n) || 1));
+  waveT = 0;
+  devHudStatus(`已跳到第 ${wave} 波（难度倍率不变，敌人血量按波次曲线重算）`);
+  devRefreshReadout();
+}
+
+function devEndWave() {
+  wave++;
+  waveT = 0;
+  if (wave % 10 === 0) spawnEnemy('boss');
+  else if (wave % 5 === 0) spawnEliteGroup(eliteGroupSize());
+  devHudStatus(`已进入第 ${wave} 波`);
+  devRefreshReadout();
+}
+
+function devClearEnemies() {
+  const n = enemies.length;
+  enemies = [];
+  enemyBullets = [];
+  bossArena = null;                    // 首领被清掉，竞技场一并解除
+  devHudStatus(n ? `已清空场上 ${n} 个敌人` : '场上本来就没有敌人');
+  devRefreshReadout();
+}
+
+// ---- 刷怪 ----
+function devSpawnPoint(mode, i, n) {
+  const cnt = Math.max(1, n);
+  const a = (Math.PI * 2 / cnt) * i + Math.random() * 0.35;
+  if (mode === 'random') return { x: 60 + Math.random() * (WORLD.w - 120), y: 60 + Math.random() * (WORLD.h - 120) };
+  if (mode === 'center') {
+    const rr = 60 + Math.random() * 90;
+    return { x: camera.x + viewW() / 2 + Math.cos(a) * rr, y: camera.y + viewH() / 2 + Math.sin(a) * rr };
+  }
+  if (mode === 'edge') {                // 屏幕外一圈，像正常刷怪那样走进来
+    const side = Math.random();
+    if (side < 0.5) return { x: camera.x + Math.random() * viewW(), y: camera.y - 60 };
+    if (side < 0.75) return { x: camera.x - 60, y: camera.y + Math.random() * viewH() };
+    if (side < 0.9) return { x: camera.x + viewW() + 60, y: camera.y + Math.random() * viewH() };
+    return { x: camera.x + Math.random() * viewW(), y: camera.y + viewH() + 60 };
+  }
+  const rr = 130 + Math.random() * 90;   // near：玩家周围一圈，保证在视野里
+  return { x: squad.x + Math.cos(a) * rr, y: squad.y + Math.sin(a) * rr };
+}
+
+function devSpawnObstacle(type, p) {
+  const def = OBSTACLE_DEFS[type];
+  if (!def) return;
+  if (type === 'tree') {
+    obstacles.push({ x: p.x, y: p.y, r: FLORA_CFG.tree.r, type: 'tree', hp: Infinity, maxHp: Infinity, dead: false, hitT: 0, aggro: 0, grow: 1 });
+  } else {
+    obstacles.push({ x: p.x, y: p.y, r: def.r, type, hp: def.hp, maxHp: def.hp, dead: false, hitT: 0 });
+  }
+}
+
+function devDoSpawn() {
+  const sel = devQ('dev-spawn-type').value;
+  const n = Math.max(1, Math.min(40, parseInt(devQ('dev-spawn-n').value, 10) || 1));
+  const pos = devQ('dev-spawn-pos').value;
+  const flags = { devStatic: devQ('dev-spawn-static').checked, devPeaceful: devQ('dev-spawn-peace').checked };
+
+  if (sel.startsWith('ob:')) {          // 建筑：木桶 / 箱子 / 石柱 / 树木
+    const type = sel.slice(3);
+    for (let i = 0; i < n; i++) devSpawnObstacle(type, devSpawnPoint(pos, i, n));
+    devHudStatus(`已刷出 ${n} 个建筑（${(OBSTACLE_DEFS[type] || {}).name || type}）`);
+    return;
+  }
+
+  let type = sel, bossKind = null, affixes;
+  if (sel.startsWith('boss:')) { type = 'boss'; bossKind = sel.slice(5); }
+  if (sel === 'elite:0') { type = 'elite'; affixes = []; }      // 无词缀精英
+
+  for (let i = 0; i < n; i++) {
+    const p = devSpawnPoint(pos, i, n);
+    spawnEnemy(type, p.x, p.y, Object.assign({ bossKind }, flags, affixes ? { affixes } : {}));
+  }
+  const label = bossKind ? `BOSS · ${(BOSS_KINDS[bossKind] || {}).name || bossKind}` : (DEV_SPAWN_LABELS[type] || type);
+  devHudStatus(`已刷出 ${n} × ${label}${flags.devStatic ? '（站桩）' : ''}${flags.devPeaceful ? '（停手）' : ''}`);
+  devRefreshReadout();
+}
+
+// 把「站桩 / 停手」一键套到场上所有敌人（有一个没开就全开）
+function devMarkAll(field) {
+  if (!enemies.length) { devHudStatus('场上没有敌人'); return; }
+  const on = !enemies.every(e => e[field]);
+  enemies.forEach(e => {
+    e[field] = on;
+    if (field === 'devStatic') { e.kbx = 0; e.kby = 0; }
+  });
+  devHudStatus(`${on ? '已开启' : '已关闭'}「${field === 'devStatic' ? '站桩' : '停手'}」· 共 ${enemies.length} 只`);
+}
+
+// ---- 卡牌任选 ----
+// 收集卡牌：临时放行全部前置（devForcePool）看一遍升级池，再补上首领奖励；
+// 严格模式则直接读当前真实可选的池子。
+function devCardCatalog() {
+  if (devQ('dev-card-strict').checked) {
+    return buildUpgradePool().map(u => Object.assign({}, u, { boss: false }));
+  }
+  const savedIds = appliedIds, savedPicks = pickCount;
+  appliedIds = new Set();
+  pickCount = {};
+  let pool = [];
+  try {
+    devForcePool = true;
+    pool = buildUpgradePool();
+  } finally {
+    devForcePool = false;
+    appliedIds = savedIds;
+    pickCount = savedPicks;
+  }
+  const cards = pool.map(u => Object.assign({}, u, { boss: false }));
+  BOSS_BUFFS.forEach(b => cards.push(Object.assign({}, b, { route: null, evo: false, boss: true })));
+  return cards;
+}
+
+function devCardCategory(c) {
+  if (c.boss) return 'boss';
+  if (c.evo) return 'evo';
+  if (c.route === 'scythe' || c.route === 'sword') return 'summon';
+  if (c.route === 'lightning' || /^(enchant|burn|frost|elemental|blast|winter)/.test(c.id)) return 'element';
+  if (['rifle', 'shotgun', 'laser', 'sniper'].includes(c.route)) return 'weapon';
+  if (/^pet-/.test(c.id)) return 'pet';
+  return 'basic';
+}
+
+function devRenderCatChips() {
+  const box = devQ('dev-card-cats');
+  if (!box) return;
+  box.innerHTML = '';
+  DEV_CARD_CATS.forEach(([val, label]) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    if (devCardCat === val) b.classList.add('active');
+    b.onclick = () => { devCardCat = val; devRenderCatChips(); devRenderCards(); };
+    box.appendChild(b);
+  });
+}
+
+function devRenderCards() {
+  const box = devQ('dev-card-list');
+  if (!box) return;
+  const all = devCardCatalog();
+  const q = (devQ('dev-card-search').value || '').trim().toLowerCase();
+  const list = all.filter(c => (devCardCat === 'all' || devCardCategory(c) === devCardCat)
+    && (!q || (c.name + ' ' + c.id + ' ' + (c.desc || '')).toLowerCase().includes(q)));
+  box.innerHTML = '';
+  list.forEach(c => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dev-card' + (c.evo ? ' evo' : '') + (c.boss ? ' boss' : '');
+    b.innerHTML = '<span class="dev-card-name">' + c.name + '</span>'
+      + '<span class="dev-card-desc">' + (c.desc || '') + '</span>'
+      + (appliedIds.has(c.id) ? '<span class="dev-card-got">已选</span>' : '');
+    b.onclick = () => devApplyCard(c);
+    box.appendChild(b);
+  });
+  devQ('dev-card-count').textContent = `显示 ${list.length} / 共 ${all.length} 张`
+    + (devQ('dev-card-strict').checked ? '（严格：只列当前可选）' : '（已忽略前置）');
+}
+
+function devApplyCard(card) {
+  // 进化卡在卡池里没带 route，回表里取；缺「容器」的先补上，否则武器 / 召唤物的卡取不到对象会报错
+  const route = card.route || ((EVOLUTIONS.find(ev => ev.id === card.id) || {}).route);
+  if (route) {
+    if (WEAPON_DEFS[route] && !getWeapon(route)) addWeapon(route);
+    if (POWER_DEFS[route] && !getSummon(route)) addSummon(route);
+  }
+  try {
+    card.apply();
+  } catch (err) {
+    devHudStatus(`「${card.name}」暂时加不上：${err.message}`);
+    return;
+  }
+  appliedIds.add(card.id);
+  if (route) routePicks[route] = (routePicks[route] || 0) + 1;
+  devHudStatus(`已获得「${card.name}」`);
+  devRenderCards();
+  devRefreshReadout();
+}
+
+// ---- 玩家 / 时间 ----
+function renderDevSpeedChips() {
+  const box = devQ('dev-speed');
+  if (!box) return;
+  box.innerHTML = '';
+  DEV_SPEEDS.forEach(v => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = 'x' + v;
+    if (devSpeed === v) b.classList.add('active');
+    b.onclick = () => { devSpeed = v; renderDevSpeedChips(); devHudStatus(`游戏速度 x${v}`); };
+    box.appendChild(b);
+  });
+}
+
+function devStepFrame() {
+  if (state !== 'paused') { devHudStatus('先暂停（暂停 / 继续），再单步'); return; }
+  state = 'playing';
+  update(1 / 60);
+  if (state === 'playing') state = 'paused';     // update 可能把状态改掉（升级 / 结算），那就保持它
+  devRefreshReadout();
+  devHudStatus('已推进 1 帧（1/60s）');
+}
+
+function devSyncControls() {
+  const set = (id, v) => { const el = devQ(id); if (el) el.checked = !!v; };
+  set('dev-freeze-wave', devFreezeWave);
+  set('dev-invuln', devInvuln);
+  set('dev-oneshot', devOneShot);
+  set('dev-info-toggle', devInfoOn);
+  const wi = devQ('dev-wave-input');
+  if (wi) wi.value = wave;
+  renderDevSpeedChips();
+}
+
+function devInitHud() {
+  const on = (id, fn) => { const el = devQ(id); if (el) el.onclick = fn; };
+  const change = (id, fn) => { const el = devQ(id); if (el) el.onchange = () => fn(el.checked); };
+
+  on('dev-toggle', toggleDevHud);
+  on('dev-hud-close', () => setDevHud(false));
+
+  document.querySelectorAll('.dev-tab').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.dev-tab').forEach(b => b.classList.toggle('active', b === btn));
+      document.querySelectorAll('.dev-pane').forEach(p => p.classList.toggle('active', p.dataset.devpane === btn.dataset.devtab));
+      if (btn.dataset.devtab === 'card') devRenderCards();
+    };
+  });
+
+  // 波次
+  on('dev-wave-prev', () => devJumpWave(wave - 1));
+  on('dev-wave-next', () => devJumpWave(wave + 1));
+  on('dev-wave-jump', () => devJumpWave(parseInt(devQ('dev-wave-input').value, 10)));
+  on('dev-wave-end', devEndWave);
+  on('dev-clear', devClearEnemies);
+  change('dev-freeze-wave', v => { devFreezeWave = v; devHudStatus(v ? '波次计时已冻结' : '波次计时已恢复'); });
+  on('dev-elite-group', () => {
+    const n = eliteGroupSize();
+    spawnEliteGroup(n);
+    devHudStatus(`已刷出 ${n} 只精英`);
+    devRefreshReadout();
+  });
+  on('dev-boss-now', () => {
+    spawnEnemy('boss');
+    devHudStatus(`已刷出本波对应的首领（第 ${wave} 波）`);
+    devRefreshReadout();
+  });
+
+  // 刷怪
+  on('dev-spawn-go', devDoSpawn);
+  on('dev-mark-static', () => devMarkAll('devStatic'));
+  on('dev-mark-peace', () => devMarkAll('devPeaceful'));
+
+  // 卡牌
+  const search = devQ('dev-card-search');
+  if (search) search.oninput = devRenderCards;
+  change('dev-card-strict', () => devRenderCards());
+
+  // 玩家 / 时间
+  change('dev-invuln', v => { devInvuln = v; devHudStatus(v ? '无敌已开启' : '无敌已关闭'); });
+  change('dev-oneshot', v => { devOneShot = v; devHudStatus(v ? '秒杀已开启' : '秒杀已关闭'); });
+  on('dev-soldier-add', () => {
+    addSoldier();
+    devHudStatus(`士兵 +1（当前 ${soldiers.length} 名）`);
+    devRefreshReadout();
+  });
+  on('dev-soldier-del', () => {
+    if (soldiers.length <= 1) { devHudStatus('至少保留 1 名士兵'); return; }
+    squadHp = Math.max(1, squadHp - soldierMaxHp());    // 掉一格血池 → 少一个小人
+    dropSoldiersToFitPool();
+    devHudStatus(`士兵 −1（当前 ${soldiers.length} 名）`);
+    devRefreshReadout();
+  });
+  on('dev-heal', () => { squadHp = squadMaxHp; devHudStatus('血池已回满'); devRefreshReadout(); });
+  on('dev-levelup', () => {
+    if (state !== 'playing') { devHudStatus('对局进行中才能升级（先继续游戏）'); return; }
+    level++;
+    openUpgrade();
+    devHudStatus('已触发升级选卡');
+  });
+  on('dev-xp-add', () => {
+    if (state !== 'playing') { devHudStatus('对局进行中才能加经验（先继续游戏）'); return; }
+    collectXp(200);
+    devHudStatus('经验 +200（按当前经验倍率结算）');
+    devRefreshReadout();
+  });
+  on('dev-reroll-add', () => {
+    rerollLeft += 3;
+    updateRerollButton();
+    devHudStatus(`重掷次数 +3（当前 ${rerollLeft} 次）`);
+  });
+  on('dev-pause', () => {
+    if (state === 'playing') pauseGame();
+    else if (state === 'paused') resumeGame();
+    else devHudStatus('当前状态不能暂停');
+  });
+  on('dev-step', devStepFrame);
+  change('dev-info-toggle', v => {
+    devInfoOn = v;
+    const el = devQ('dev-info-hud');
+    if (el) el.classList.toggle('hidden', !v);
+    if (v) renderDevInfo();
+  });
+
+  renderDevSpeedChips();
+  devRenderCatChips();
+}
+
+devInitHud();
+
 // 启动：先确定账号数据来源并恢复登录态，再决定进主菜单还是登录页
 loadUsers().then(() => {
   const savedUser = localStorage.getItem('fury_current_user');
@@ -6474,4 +8091,5 @@ loadUsers().then(() => {
   else showLogin();
 });
 requestAnimationFrame(loop);
+requestAnimationFrame(charPreviewLoop);
 requestAnimationFrame(charPreviewLoop);

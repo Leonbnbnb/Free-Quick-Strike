@@ -93,7 +93,7 @@ button:disabled {
   transform: none;
 }
 
-.hidden, .overlay.hidden, .skill-btn.hidden, .ingame-btn.hidden, .login-form input.hidden, .login-actions button.hidden {
+.hidden, .overlay.hidden, .skill-btn.hidden, .ingame-btn.hidden, .login-form input.hidden, .login-actions button.hidden, .dev-toggle.hidden, .dev-hud.hidden, .dev-info-hud.hidden {
   display: none;
 }
 
@@ -850,6 +850,7 @@ input[type='checkbox'] {
 }
 
 .card-icon {
+  position: relative;
   width: 42px;
   height: 46px;
   flex: none;
@@ -860,6 +861,26 @@ input[type='checkbox'] {
   border: 1px solid #a5d7bb26;
   border-radius: 10px;
   font-size: 23px;
+}
+
+/* 键盘快捷键角标：钉在卡面图标右下角，提示「按这个数字键直接选这张卡」 */
+.card-key {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 2px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  background: #14262b;
+  border: 1px solid #a5d7bb4d;
+  color: var(--mint);
+  font-size: 9px;
+  font-weight: 700;
+  font-style: normal;
+  line-height: 1;
 }
 
 .card-copy {
@@ -1411,6 +1432,350 @@ input[type='checkbox'] {
 .board-note {
   margin-top: 6px;
 }
+
+/* ==================== 局内调试面板（V1.26，仅开发者模式） ====================
+   悬浮在对局之上，快捷键 ` / F1 开关；层级高于暂停 / 升级遮罩，暂停时也能操作。 */
+.dev-toggle {
+  position: absolute;
+  right: 10px;
+  top: 40px;
+  z-index: 21;
+  width: 34px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border-radius: 8px;
+  background: #a3d1b91a;
+  border: 1px solid #a3d1b933;
+  color: #dcf5e6;
+  cursor: pointer;
+}
+
+.dev-toggle svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.dev-toggle:hover {
+  background: #a3d1b933;
+}
+
+.dev-hud {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  bottom: 8px;
+  width: min(340px, calc(100% - 16px));
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #0c2024f2;
+  backdrop-filter: blur(6px);
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+  box-shadow: 0 18px 40px #0007;
+}
+
+.dev-hud-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dev-hud-title {
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.dev-hud-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.dev-hud-close {
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border-radius: 6px;
+  background: #ffffff14;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dev-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.dev-tab {
+  flex: 1;
+  margin: 0;
+  padding: 7px 4px;
+  border-radius: 9px;
+  background: #ffffff12;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dev-tab.active {
+  background: var(--gold);
+  color: var(--button-ink, #283128);
+}
+
+.dev-body {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.dev-pane {
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dev-pane.active {
+  display: flex;
+}
+
+.dev-row,
+.dev-row2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dev-row strong {
+  color: var(--gold);
+}
+
+.dev-row2 > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.dev-dim {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.dev-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.dev-line input[type='number'] {
+  width: 62px;
+  margin-left: auto;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f2226;
+  color: var(--ink);
+}
+
+.dev-line select,
+.dev-pane select,
+.dev-row2 select {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f2226;
+  color: var(--ink);
+}
+
+.dev-pane input[type='search'] {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f2226;
+  color: var(--ink);
+}
+
+.dev-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.dev-check input {
+  accent-color: var(--gold);
+}
+
+.dev-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.dev-grid button,
+.dev-pane > button {
+  margin: 0;
+  padding: 8px 6px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dev-grid .dev-check {
+  padding: 6px 2px;
+}
+
+.dev-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.dev-chips button {
+  margin: 0;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #ffffff12;
+  color: var(--ink);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dev-chips button.active {
+  background: var(--gold);
+  color: var(--button-ink, #283128);
+}
+
+.dev-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.dev-card {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #ffffff0e;
+  color: var(--ink);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dev-card:hover {
+  background: #ffffff1f;
+}
+
+.dev-card .dev-card-name {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dev-card .dev-card-desc {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dev-card .dev-card-got {
+  margin-left: auto;
+  color: var(--gold);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.dev-card.evo .dev-card-name {
+  color: var(--gold);
+}
+
+.dev-card.boss .dev-card-name {
+  color: #ff9ecb;
+}
+
+.dev-note {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.dev-status {
+  min-height: 14px;
+  color: var(--mint);
+  font-size: 10px;
+}
+
+.dev-info-hud {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 22;
+  padding: 6px 9px;
+  border: 1px solid #a3d1b933;
+  border-radius: 8px;
+  background: #07191dc9;
+  color: #d6f0e6;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: pre;
+  pointer-events: none;
+}
+
+/* 面板展开时把信息浮层让到左下角，两者互不遮挡 */
+.dev-info-hud.pushed {
+  top: auto;
+  bottom: 8px;
+}
+
+/* 横屏：面板贴右侧、限高，避免挡住战场中心 */
+#stage.landscape .dev-hud {
+  left: auto;
+  right: 8px;
+  width: min(360px, 46%);
+}
+
+#stage.landscape .dev-info-hud.pushed {
+  right: auto;
+  left: 8px;
+  bottom: 8px;
+}
+
+#stage.landscape .dev-info-hud {
+  top: 8px;
+  left: 8px;
+}
+
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

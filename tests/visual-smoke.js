@@ -30,6 +30,7 @@ window.visualScene = scene => {
     else if (scene === 'boss') { visualCombat(); openBossReward(); }
     else if (scene === 'pause') { visualCombat(); pauseGame(); }
     else if (scene === 'gameover') { visualCombat(); gameOver(); }
+    else if (scene === 'devhud') { visualCombat(); meta.devMode = true; setDevHud(true); devTickHud(0.016); }
     else if (scene === 'checks') return visualChecks();
     parent.reportVisual('场景：' + scene + ' · 使用内存存档，未写入账号文件');
   } catch (e) { parent.reportVisual('FAIL: ' + e.stack); }
@@ -104,9 +105,9 @@ async function visualChecks() {
     const centerX = soldiers.reduce((sum, s) => sum + s.x, 0) / soldiers.length;
     const centerY = soldiers.reduce((sum, s) => sum + s.y, 0) / soldiers.length;
     assert(Math.hypot(anchor.x - centerX, anchor.y - centerY) < 0.01, '镰刀以可见角色编队中心环绕');
-    // 冲锋伤害独立于普通接触伤害，100 点初始血池命中一次应明显削减。
+    // 冲锋伤害独立于普通接触伤害，100 点初始血池命中一次应明显削减（V1.25 起冲刺 70 → 80）。
     squadHp = squadMaxHp = 100; damageSoldier(soldiers[0], BOSS_SKILL.damage);
-    assert(Math.round(squadHp) === 30, 'Boss 冲刺一次造成 70 点伤害');
+    assert(Math.round(squadHp) === 100 - BOSS_SKILL.damage, 'Boss 冲刺一次造成 80 点伤害');
     // 通过真正的飞剑命中产生斩痕，再让主循环在暂停状态清理。
     visualSetup(); startGame(); weapons = []; summons = []; pet = null; enemies = []; obstacles = [];
     addSummon('sword'); spawnEnemy('grunt', squad.x+45, squad.y);
@@ -119,14 +120,95 @@ async function visualChecks() {
     await new Promise(resolve => setTimeout(resolve, 350));
     render();
     assert(swordSlashes.length === 0, '经验拾取后斩痕自动清零（暂停亦清理）');
-    // 真实执行一次冲刺碰撞：初始 100 血池应承受独立的 70 点重击。
+    // 真实执行一次冲刺碰撞：初始 100 血池应承受独立的 80 点重击。
+    // （V1.25 起冲刺改走 dashT / dashSpd / dashDamage / dashKind 这套位移字段，不再是 skillState = 'dash'）
     visualSetup(); reset(); state = 'playing';
-    enemies = []; spawnEnemy('boss', soldiers[0].x, soldiers[0].y);
+    enemies = []; spawnEnemy('boss');
     const chargeBoss = enemies[0];
-    chargeBoss.skillState = 'dash'; chargeBoss.skillT = .1;
+    // 首领出场会被竞技场拉到玩家 220 距离外，这里把队伍搬到它身上，保证这次冲刺一定命中
+    soldiers.forEach(s => { s.x = chargeBoss.x; s.y = chargeBoss.y; });
     chargeBoss.skillDirX = 0; chargeBoss.skillDirY = 0; chargeBoss.skillHit = new Set();
+    chargeBoss.dashSpd = 0; chargeBoss.dashT = BOSS_SKILL.dashTime;
+    chargeBoss.dashDamage = BOSS_SKILL.damage; chargeBoss.dashKind = 'charge';
     squadHp = 100; squadMaxHp = 100; updateEnemies(1 / 60);
-    assert(squadHp === 30, 'Boss 冲刺造成 70 点明确伤害');
+    assert(squadHp === 100 - BOSS_SKILL.damage, 'Boss 冲刺造成 80 点明确伤害');
+    // V1.26.2：首领走位应收敛到 orbitR（旧版是「出死区才修正」的开关式，会停在死区边缘）。
+    visualSetup(); reset(); state = 'playing';
+    enemies = []; enemyBullets = [];
+    const bossAnchor = { x: squad.x, y: squad.y };
+    spawnEnemy('boss', bossAnchor.x + 260, bossAnchor.y, { bossKind: 'barrage' });   // orbitR = 300
+    const orbitBoss = enemies[0];
+    const pinSquad = () => { soldiers.forEach(s => { s.x = bossAnchor.x; s.y = bossAnchor.y; }); squad.x = bossAnchor.x; squad.y = bossAnchor.y; squadHp = squadMaxHp; };
+    for (let i = 0; i < 900; i++) {
+      if (state === 'upgrade') applyUpgrade(upgrades[0].id);
+      pinSquad(); update(1 / 60); pinSquad();
+    }
+    const orbitD = Math.hypot(orbitBoss.x - bossAnchor.x, orbitBoss.y - bossAnchor.y);
+    assert(Math.abs(orbitD - 300) < 15, '首领走位收敛到目标距离（orbitR）');
+    // V1.26.2：蓄力方向前 40% 追踪、之后锁定 —— 指示带不再一直对着玩家转。
+    visualSetup(); reset(); state = 'playing';
+    enemies = []; enemyBullets = [];
+    spawnEnemy('boss', squad.x + 300, squad.y, { bossKind: 'charge' });
+    const aimBoss = enemies[0];
+    aimBoss.skillState = 'charge'; aimBoss.skillT = BOSS_SKILL.chargeTime; aimBoss.chargeWind = BOSS_SKILL.chargeTime;
+    aimBoss.skillDirX = 0; aimBoss.skillDirY = 0;
+    const aimAt = {};
+    for (let i = 0; i < 58; i++) {
+      // 玩家绕着首领转圈，追踪窗口内方向应该跟着改，窗口外应该一动不动
+      const a = Math.PI + i * 0.05;
+      const px = aimBoss.x + Math.cos(a) * 300, py = aimBoss.y + Math.sin(a) * 300;
+      soldiers.forEach(s => { s.x = px; s.y = py; }); squad.x = px; squad.y = py; squadHp = squadMaxHp;
+      update(1 / 60);
+      if ([5, 18, 34, 52].includes(i)) aimAt[i] = Math.atan2(aimBoss.skillDirY, aimBoss.skillDirX);
+    }
+    assert(Math.abs(aimAt[5] - aimAt[18]) > 1e-4, '蓄力前段仍在追踪玩家');
+    assert(aimAt[34] === aimAt[52], '蓄力方向在追踪窗口后锁定');
+    // V1.26.2：分裂者的突进撕咬真的会触发（旧阈值 116 比它自己的 orbitR 110 还大，一直被误判为「贴脸」）。
+    visualSetup(); reset(); state = 'playing';
+    enemies = []; enemyBullets = [];
+    spawnEnemy('boss', bossAnchor.x + 300, bossAnchor.y, { bossKind: 'splitter' });
+    const biteBoss = enemies[0];
+    let biteFrames = 0;
+    for (let i = 0; i < 600; i++) {
+      if (state === 'upgrade') applyUpgrade(upgrades[0].id);
+      pinSquad(); update(1 / 60); pinSquad();
+      if (biteBoss.dashKind === 'bite') biteFrames++;
+    }
+    assert(biteFrames > 0, '分裂者会突进撕咬');
+    // 局内调试面板（V1.26）：分页、卡池全量、站桩/停手开关与入口显隐。
+    meta.devMode = true;
+    assert(devAvailable(), '开发者模式下调试面板可用');
+    toggleDevHud();
+    assert(devHudOpen && getComputedStyle(document.getElementById('dev-hud')).display !== 'none', '调试面板可展开');
+    devTickHud(0.016);
+    assert(getComputedStyle(document.getElementById('dev-toggle')).display !== 'none', '对局中显示调试入口按钮');
+    assert(document.querySelectorAll('.dev-tab').length === 4, '调试面板有四个分页');
+    assert(devCardCatalog().length > 60, '忽略前置时列出全量卡牌');
+    document.querySelector('.dev-tab[data-devtab="card"]').click();
+    assert(document.getElementById('dev-card-list').children.length > 20, '卡牌页渲染卡牌按钮');
+    devClearEnemies();
+    document.getElementById('dev-spawn-type').value = 'boss:charge';
+    document.getElementById('dev-spawn-static').checked = true;
+    document.getElementById('dev-spawn-peace').checked = true;
+    devDoSpawn();
+    const devDummy = enemies[enemies.length - 1];
+    assert(devDummy && devDummy.kind === 'charge' && devDummy.devStatic && devDummy.devPeaceful, '刷出站桩 · 停手的首领');
+    const dummyX = devDummy.x, dummyY = devDummy.y;
+    let devDashFrames = 0;
+    for (let i = 0; i < 120; i++) { squadHp = squadMaxHp; update(1 / 60); if (devDummy.dashKind) devDashFrames++; }
+    assert(Math.hypot(devDummy.x - dummyX, devDummy.y - dummyY) < 0.5 && devDashFrames === 0, '站桩 · 停手的首领不动也不出招');
+    devJumpWave(20);
+    assert(wave === 20, '调试面板跳波');
+    devClearEnemies();
+    assert(!enemies.length && !bossArena, '清空场上敌人并解除竞技场');
+    setDevHud(false);
+    assert(!devHudOpen && getComputedStyle(document.getElementById('dev-hud')).display === 'none', '调试面板可关闭（隐藏类不被同优先级规则盖掉）');
+    devSpeed = 4; devInvuln = true; devOneShot = true; devFreezeWave = true;
+    devResetTransient();
+    assert(devSpeed === 1 && !devInvuln && !devOneShot && !devFreezeWave, '新对局复位调试开关');
+    meta.devMode = false;
+    devTickHud(0.016);
+    assert(document.getElementById('dev-toggle').classList.contains('hidden'), '非开发者模式隐藏调试入口');
     visualScene('home');
     passed.push('完成：' + frames + ' 帧，' + passed.length + ' 项检查通过');
     parent.reportVisual(passed.join(' / '));

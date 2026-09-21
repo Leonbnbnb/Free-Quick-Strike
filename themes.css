@@ -127,6 +127,8 @@ button:hover { background: color-mix(in srgb, var(--button) 85%, white); }
 .user-chip, .char-tag, .mission-strip strong, .item-name, .card .name { color: var(--ink); }
 .hero-sub, .stage-caption, .mission-strip div > span, .control-hint, .item-desc, .card .desc, .coin-total, .ghost, .intro-sub, .setting-row { color: var(--muted); }
 .card-icon, .item-btn.equipped { color: var(--mint); background: color-mix(in srgb, var(--mint) 10%, var(--surface)); border-color: var(--line); }
+.card-key { color: var(--mint); background: color-mix(in srgb, var(--mint) 8%, var(--surface)); border-color: var(--line); }
+.card.evo .card-key { color: var(--gold); background: color-mix(in srgb, var(--gold) 10%, var(--surface)); }
 .card.evo { border-color: var(--gold); background: color-mix(in srgb, var(--gold) 13%, var(--surface)); }
 .card.evo .name, .card.evo .card-icon { color: var(--gold); }
 .card-arrow { color: var(--muted); }

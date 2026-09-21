@@ -22,6 +22,151 @@
       <button id="skill-slow" class="skill-btn hidden" title="时缓">时缓</button>
     </div>
 
+    <!-- 局内调试面板（仅开发者模式可见；对局中按 ` 或 F1 开关） -->
+    <button id="dev-toggle" class="dev-toggle hidden" title="调试面板（`）" aria-label="调试面板">
+      <svg viewBox="0 0 24 24"><path d="M7 8l-3 4 3 4M17 8l3 4-3 4M14 5l-4 14"/></svg>
+    </button>
+
+    <!-- 调试信息浮层：勾选后贴在左上角，实时显示帧率 / 敌人数 / 波次等 -->
+    <div id="dev-info-hud" class="dev-info-hud hidden" aria-hidden="true"></div>
+
+    <section id="dev-hud" class="dev-hud hidden" aria-label="对局调试面板">
+      <div class="dev-hud-head">
+        <span class="dev-hud-title">调试面板</span>
+        <span class="dev-hud-hint">` / F1 开关</span>
+        <button id="dev-hud-close" class="dev-hud-close" aria-label="关闭调试面板">×</button>
+      </div>
+
+      <div class="dev-tabs" role="tablist">
+        <button class="dev-tab active" data-devtab="wave">波次</button>
+        <button class="dev-tab" data-devtab="spawn">刷怪</button>
+        <button class="dev-tab" data-devtab="card">卡牌</button>
+        <button class="dev-tab" data-devtab="self">玩家</button>
+      </div>
+
+      <div class="dev-body">
+        <!-- 波次控制 -->
+        <div class="dev-pane active" data-devpane="wave">
+          <div class="dev-row">
+            <span>当前波次</span>
+            <strong id="dev-wave-now">1</strong>
+            <span class="dev-dim" id="dev-wave-t">0.0s / 20s</span>
+          </div>
+          <div class="dev-grid">
+            <button id="dev-wave-prev" class="ghost">−1 波</button>
+            <button id="dev-wave-next" class="ghost">+1 波</button>
+          </div>
+          <div class="dev-line">跳到波次
+            <input type="number" id="dev-wave-input" min="1" max="9999" step="1" inputmode="numeric" value="1">
+            <button id="dev-wave-jump" class="ghost">跳</button>
+          </div>
+          <div class="dev-grid">
+            <button id="dev-wave-end" class="ghost">立刻结束本波</button>
+            <button id="dev-clear" class="ghost">清空场上敌人</button>
+          </div>
+          <label class="dev-check"><input type="checkbox" id="dev-freeze-wave"> 冻结波次计时</label>
+          <div class="dev-grid">
+            <button id="dev-elite-group" class="ghost">刷一群精英</button>
+            <button id="dev-boss-now" class="ghost">立刻出 Boss</button>
+          </div>
+        </div>
+
+        <!-- 刷怪 -->
+        <div class="dev-pane" data-devpane="spawn">
+          <label class="dev-line">种类
+            <select id="dev-spawn-type">
+              <optgroup label="首领">
+                <option value="boss:charge">冲锋者</option>
+                <option value="boss:barrage">弹幕者</option>
+                <option value="boss:summoner">召唤者</option>
+                <option value="boss:splitter">分裂者</option>
+              </optgroup>
+              <optgroup label="精英 / 特殊">
+                <option value="elite">精英（随机词缀）</option>
+                <option value="elite:0">精英（无词缀）</option>
+                <option value="bomber">自爆怪</option>
+                <option value="hunter">猎人</option>
+                <option value="healer">治疗兵</option>
+                <option value="shielder">护盾兵</option>
+                <option value="summoner">召唤兵</option>
+                <option value="treant">树怪</option>
+              </optgroup>
+              <optgroup label="小怪">
+                <option value="grunt">普通怪</option>
+                <option value="fast">快速怪</option>
+                <option value="ranged">远程怪</option>
+              </optgroup>
+              <optgroup label="建筑">
+                <option value="ob:barrel">木桶</option>
+                <option value="ob:crate">箱子</option>
+                <option value="ob:pillar">石柱</option>
+                <option value="ob:tree">树木</option>
+              </optgroup>
+            </select>
+          </label>
+          <div class="dev-row2">
+            <label class="dev-line">数量 <input type="number" id="dev-spawn-n" min="1" max="40" step="1" inputmode="numeric" value="1"></label>
+            <label class="dev-line">位置
+              <select id="dev-spawn-pos">
+                <option value="near">玩家附近</option>
+                <option value="center">屏幕中心</option>
+                <option value="edge">屏幕边外</option>
+                <option value="random">场上随机</option>
+              </select>
+            </label>
+          </div>
+          <label class="dev-check"><input type="checkbox" id="dev-spawn-static"> 站桩（不移动）</label>
+          <label class="dev-check"><input type="checkbox" id="dev-spawn-peace"> 停手（不造成伤害）</label>
+          <button id="dev-spawn-go" class="ghost">刷出</button>
+          <div class="dev-grid">
+            <button id="dev-mark-static" class="ghost">全场切换站桩</button>
+            <button id="dev-mark-peace" class="ghost">全场切换停手</button>
+          </div>
+          <p class="dev-note">「站桩 + 停手」= 沙包：不移动也不还手，适合测伤害与卡牌；不造成伤害的敌人仍会走位（除勾了站桩）。</p>
+        </div>
+
+        <!-- 卡牌任选 -->
+        <div class="dev-pane" data-devpane="card">
+          <div class="dev-row2">
+            <input type="search" id="dev-card-search" placeholder="搜索卡名 / 关键词" aria-label="搜索卡牌">
+            <label class="dev-check"><input type="checkbox" id="dev-card-strict"> 只看当前可选（遵守前置）</label>
+          </div>
+          <div class="dev-chips" id="dev-card-cats"></div>
+          <div id="dev-card-list" class="dev-card-list"></div>
+          <p class="dev-note" id="dev-card-count"></p>
+        </div>
+
+        <!-- 玩家 / 时间 -->
+        <div class="dev-pane" data-devpane="self">
+          <div class="dev-grid">
+            <label class="dev-check"><input type="checkbox" id="dev-invuln"> 无敌</label>
+            <label class="dev-check"><input type="checkbox" id="dev-oneshot"> 秒杀（一击必杀）</label>
+          </div>
+          <div class="dev-row">
+            <span>血池</span>
+            <strong id="dev-self-hp">—</strong>
+            <span class="dev-dim" id="dev-self-sum">LV1 · 敌 0</span>
+          </div>
+          <div class="dev-grid">
+            <button id="dev-soldier-add" class="ghost">士兵 +1</button>
+            <button id="dev-soldier-del" class="ghost">士兵 −1</button>
+            <button id="dev-heal" class="ghost">回满血</button>
+            <button id="dev-levelup" class="ghost">直接升级</button>
+            <button id="dev-xp-add" class="ghost">经验 +200</button>
+            <button id="dev-reroll-add" class="ghost">重抽 +3</button>
+          </div>
+          <div class="dev-line">游戏速度 <span class="dev-chips" id="dev-speed"></span></div>
+          <div class="dev-grid">
+            <button id="dev-pause" class="ghost">暂停 / 继续</button>
+            <button id="dev-step" class="ghost">单步 1 帧</button>
+          </div>
+          <label class="dev-check"><input type="checkbox" id="dev-info-toggle"> 显示调试信息浮层</label>
+        </div>
+      </div>
+
+      <p id="dev-hud-status" class="dev-status" role="status"></p>
+    </section>
+
     <!-- 登录 / 注册 -->
     <div id="login" class="overlay">
       <div class="panel login-panel">
@@ -99,7 +244,7 @@
               <span>排行榜</span>
             </button>
           </div>
-          <p class="control-hint"><span>W A S D / 方向键</span> 移动 <i>·</i> 触屏拖动 <i>·</i> 自动攻击</p>
+          <p class="control-hint"><span>W A S D / 方向键</span> 移动 <i>·</i> 触屏拖动 <i>·</i> 自动攻击 <i>·</i> <span>1~6</span> 选卡 <i>·</i> <span>R</span> 重掷 <i>·</i> <span>Q</span> 时缓 <i>·</i> <span>Esc / P</span> 暂停</p>
         </div>
 
         <!-- 角色个性化 -->
@@ -179,16 +324,16 @@
           <div class="coin-total">当前金币 <span id="coin-count2">0</span></div>
           <div class="sec-title">获取方式</div>
           <div class="item-row">
-            <div class="item-info"><div class="item-name">击败小怪</div><div class="item-desc">普通 / 快速 / 远程怪</div></div>
+            <div class="item-info"><div class="item-name">击败小怪</div><div class="item-desc">普通 / 快速 / 远程怪（50% 概率掉落）</div></div>
             <span class="coin-get">+1</span>
           </div>
           <div class="item-row">
-            <div class="item-info"><div class="item-name">击败精英怪</div><div class="item-desc">每 5 波出现，带护盾</div></div>
-            <span class="coin-get">+5</span>
+            <div class="item-info"><div class="item-name">击败精英怪</div><div class="item-desc">每 5 波成群出现（血量低、带随机词缀）</div></div>
+            <span class="coin-get">+2</span>
           </div>
           <div class="item-row">
             <div class="item-info"><div class="item-name">击败 Boss</div><div class="item-desc">每 10 波出现</div></div>
-            <span class="coin-get">+50</span>
+            <span class="coin-get">+25</span>
           </div>
           <p class="dim coin-note">金币在每局结算时累加并保存到账号，用于解锁武器、护甲与宠物。</p>
         </div>
