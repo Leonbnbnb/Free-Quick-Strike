@@ -82,7 +82,7 @@ function readBody(req) {
 //   POST   /api/users  { user, createOnly:true }         注册（无需令牌），返回令牌
 //   POST   /api/users  { user }                          改密（需令牌，只动密码列）
 //   PATCH  /api/users  { username, meta, avatar }        更新存档 + 公开头像（需令牌）
-//   DELETE /api/users?username=<name>                    删除账号（需令牌，只能删自己）
+//   DELETE /api/users?username=<name>                    删除账号（需令牌，只能删自己；顺带清 scores / friendships / messages / rooms）
 //
 // `avatar` 是**公开头像的副本**：好友列表要读别人的头像，而 meta 是整个存档（隐私），
 // 所以前端在保存存档时把 meta.avatar 的副本一并写进这一列，好友接口只读这一列。
@@ -192,6 +192,9 @@ async function handleUsersApi(req, res) {
     writeFriends(readFriends().filter(x => x.requester !== username && x.addressee !== username));
     // 还有两个方向的私聊消息（同上）
     writeMessages(readMessages().filter(x => x.from !== username && x.to !== username));
+    // 房间与房间邀请（我建的房 / 我的席位 / 我发出的邀请 / 我收到的邀请）
+    writeRooms(readRooms().filter(x => x.host !== username && x.guest !== username));
+    writeRoomInvites(readRoomInvites().filter(x => x.inviter !== username && x.invitee !== username));
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -434,12 +437,219 @@ async function handleChatApi(req, res) {
   res.writeHead(405).end();
 }
 
+// 合作房间接口（契约与线上 api/rooms.js 一致）
+//   GET  /api/rooms?code=<code>      房间快照（需令牌），不存在时 room:null
+//   GET  /api/rooms?invites=1        我收到的房间邀请（需令牌）
+//   POST /api/rooms { action, ... }  create / join / ready / invite / leave / decline（需令牌）
+// 身份一律取自令牌；**一个账号同时只在一个房间里**（建房 / 进房前先腾出别处的席位）。
+// 房间落盘 data/rooms.json，邀请落盘 data/room-invites.json。
+// 本轮只做「房间系统」：**局内双人同步尚未实现**，room 里没有对局状态。
+const ROOMS_FILE = path.join(DATA_DIR, 'rooms.json');
+const ROOM_INVITES_FILE = path.join(DATA_DIR, 'room-invites.json');
+// 房间码字母表刻意去掉 I / O / 0 / 1：念给好友听、手打都不会认错
+const ROOM_CODE_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const ROOM_CODE_LEN = 6;
+const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
+
+function readRooms() {
+  try {
+    const list = JSON.parse(fs.readFileSync(ROOMS_FILE, 'utf8'));
+    return Array.isArray(list) ? list : [];
+  } catch (e) { return []; }
+}
+
+function writeRooms(list) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(ROOMS_FILE, JSON.stringify(list, null, 2), 'utf8');
+}
+
+function readRoomInvites() {
+  try {
+    const list = JSON.parse(fs.readFileSync(ROOM_INVITES_FILE, 'utf8'));
+    return Array.isArray(list) ? list : [];
+  } catch (e) { return []; }
+}
+
+function writeRoomInvites(list) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(ROOM_INVITES_FILE, JSON.stringify(list, null, 2), 'utf8');
+}
+
+function newRoomCode() {
+  const bytes = crypto.randomBytes(ROOM_CODE_LEN);
+  let s = '';
+  for (let i = 0; i < ROOM_CODE_LEN; i++) s += ROOM_CODE_ALPHA[bytes[i] % ROOM_CODE_ALPHA.length];
+  return s;
+}
+
+async function handleRoomsApi(req, res) {
+  const users = readUsers();
+
+  const data = verifyToken(bearer(req));
+  if (!data) { sendJson(res, 401, { ok: false, error: '登录已失效，请重新登录' }); return; }
+  const row = users.find(x => x.username === data.u);
+  if (!row) { sendJson(res, 401, { ok: false, error: '账号不存在' }); return; }
+  if (passwordVersion(row) !== data.pv) { sendJson(res, 401, { ok: false, error: '登录已失效，请重新登录' }); return; }
+  const who = row.username;
+
+  // 房间行 -> 给前端的快照（补上双方头像，字段名与 game.js 的 coopRoom 对齐）
+  const shape = r => {
+    if (!r) return null;
+    const avatarOf = name => {
+      const u = users.find(x => x.username === name);
+      return (u && u.avatar) || null;
+    };
+    return {
+      code: r.code, host: r.host, guest: r.guest || null,
+      hostReady: !!r.host_ready, guestReady: !!r.guest_ready,
+      hostAvatar: avatarOf(r.host), guestAvatar: r.guest ? avatarOf(r.guest) : null,
+      at: r.updated_at || r.created_at,
+    };
+  };
+  const rooms = () => readRooms();
+  const findRoom = code => rooms().find(r => r.code === code);
+  const saveRoom = r => {
+    const list = rooms();
+    const i = list.findIndex(x => x.code === r.code);
+    if (i >= 0) list[i] = r; else list.push(r);
+    writeRooms(list);
+  };
+  // 解散房间：连带把它的邀请清掉（不然好友那边会一直挂着一个进不去的邀请）
+  const dropRoom = code => {
+    writeRooms(rooms().filter(r => r.code !== code));
+    writeRoomInvites(readRoomInvites().filter(i => i.code !== code));
+  };
+  const clearInvite = (code, invitee) => {
+    writeRoomInvites(readRoomInvites().filter(i => !(i.code === code && i.invitee === invitee)));
+  };
+  // 一个账号同时只在一个房间里：建房 / 进房前先把自己在别处的席位清掉
+  const clearMySeats = me => {
+    rooms().filter(r => r.host === me || r.guest === me).forEach(r => {
+      if (r.host === me) dropRoom(r.code);
+      else saveRoom({ ...r, guest: null, guest_ready: false, updated_at: new Date().toISOString() });
+    });
+  };
+
+  if (req.method === 'GET') {
+    const search = new URL(req.url, 'http://localhost').searchParams;
+    if (search.get('invites')) {
+      const mine = readRoomInvites().filter(i => i.invitee === who);
+      const list = rooms();
+      const invites = mine.filter(i => {
+        const r = list.find(x => x.code === i.code);
+        if (!r) return false;                       // 房间没了
+        if (r.host === who) return false;            // 我自己建的房
+        return !r.guest || r.guest === who;          // 已经满了就不再提示
+      }).map(i => {
+        const u = users.find(x => x.username === i.inviter);
+        return { code: i.code, inviter: i.inviter, avatar: (u && u.avatar) || null, at: i.created_at };
+      }).sort((a, b) => (String(a.at) < String(b.at) ? 1 : -1));
+      sendJson(res, 200, { ok: true, invites });
+      return;
+    }
+    const code = String(search.get('code') || '').trim().toUpperCase();
+    if (!code) { sendJson(res, 400, { ok: false, error: '缺少 code' }); return; }
+    sendJson(res, 200, { ok: true, room: shape(findRoom(code)) });
+    return;
+  }
+
+  if (req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body) { sendJson(res, 400, { ok: false, error: '请求体不是合法 JSON' }); return; }
+    const action = String(body.action || '');
+    const code = String(body.code || '').trim().toUpperCase();
+    const now = new Date().toISOString();
+
+    if (action === 'create') {
+      // 过期房间在「建房」时顺手清一遍 —— 没有定时任务，也不需要为一个大厅表上 cron
+      const cutoff = Date.now() - ROOM_TTL_MS;
+      writeRooms(rooms().filter(r => Date.parse(r.updated_at || r.created_at) >= cutoff));
+      writeRoomInvites(readRoomInvites().filter(i => Date.parse(i.created_at) >= cutoff));
+      clearMySeats(who);
+      let made = null;
+      for (let i = 0; i < 8 && !made; i++) {
+        const c = newRoomCode();
+        if (findRoom(c)) continue;   // 撞码就重摇（32^6 的空间，实际几乎不会发生）
+        made = { code: c, host: who, guest: null, host_ready: false, guest_ready: false, created_at: now, updated_at: now };
+        saveRoom(made);
+      }
+      if (!made) { sendJson(res, 500, { ok: false, error: '房间码生成失败，请再试一次' }); return; }
+      sendJson(res, 200, { ok: true, room: shape(made) });
+      return;
+    }
+
+    if (!code) { sendJson(res, 400, { ok: false, error: '缺少 code' }); return; }
+
+    if (action === 'join') {
+      const room = findRoom(code);
+      if (!room) { sendJson(res, 404, { ok: false, error: '房间不存在或已解散' }); return; }
+      if (room.host === who) { sendJson(res, 400, { ok: false, error: '这是你自己创建的房间' }); return; }
+      if (room.guest && room.guest !== who) { sendJson(res, 409, { ok: false, error: '房间已经满了' }); return; }
+      if (room.guest !== who) {
+        clearMySeats(who);
+        saveRoom({ ...room, guest: who, guest_ready: false, updated_at: now });
+        writeRoomInvites(readRoomInvites().filter(i => i.code !== code));
+      }
+      sendJson(res, 200, { ok: true, room: shape(findRoom(code)) });
+      return;
+    }
+
+    if (action === 'ready') {
+      const room = findRoom(code);
+      if (!room) { sendJson(res, 404, { ok: false, error: '房间不存在或已解散' }); return; }
+      if (room.host !== who && room.guest !== who) { sendJson(res, 403, { ok: false, error: '你不在这个房间里' }); return; }
+      const patch = room.host === who ? { host_ready: !!body.ready } : { guest_ready: !!body.ready };
+      saveRoom({ ...room, ...patch, updated_at: now });
+      sendJson(res, 200, { ok: true, room: shape(findRoom(code)) });
+      return;
+    }
+
+    if (action === 'invite') {
+      const target = String(body.username || '').trim();
+      if (!target) { sendJson(res, 400, { ok: false, error: '缺少 username' }); return; }
+      if (target === who) { sendJson(res, 400, { ok: false, error: '不能邀请自己' }); return; }
+      const room = findRoom(code);
+      if (!room) { sendJson(res, 404, { ok: false, error: '房间不存在或已解散' }); return; }
+      if (room.host !== who && room.guest !== who) { sendJson(res, 403, { ok: false, error: '你不在这个房间里' }); return; }
+      if (room.guest && room.guest !== target) { sendJson(res, 409, { ok: false, error: '房间已经满了' }); return; }
+      if (!users.some(x => x.username === target)) { sendJson(res, 404, { ok: false, error: '这个账号不存在' }); return; }
+      if (!areFriends(who, target)) { sendJson(res, 403, { ok: false, error: '只能邀请已经是好友的人' }); return; }
+      const invites = readRoomInvites().filter(i => !(i.code === code && i.invitee === target));
+      invites.push({ code, inviter: who, invitee: target, created_at: now });
+      writeRoomInvites(invites);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (action === 'decline') {
+      clearInvite(code, who);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (action === 'leave') {
+      clearInvite(code, who);        // 顺手把「我收到的这条邀请」也清掉
+      const room = findRoom(code);
+      if (room && room.host === who) dropRoom(code);                                  // 房主离开 = 解散
+      else if (room && room.guest === who) saveRoom({ ...room, guest: null, guest_ready: false, updated_at: now });
+      sendJson(res, 200, { ok: true, room: null });
+      return;
+    }
+
+    sendJson(res, 400, { ok: false, error: '未知的 action' });
+    return;
+  }
+
+  res.writeHead(405).end();
+}
+
 http.createServer((req, res) => {
   let urlPath = decodeURIComponent(req.url.split('?')[0]);
   if (urlPath === '/api/users') { handleUsersApi(req, res); return; }
   if (urlPath === '/api/leaderboard') { handleLeaderboardApi(req, res); return; }
   if (urlPath === '/api/friends') { handleFriendsApi(req, res); return; }
   if (urlPath === '/api/chat') { handleChatApi(req, res); return; }
+  if (urlPath === '/api/rooms') { handleRoomsApi(req, res); return; }
   if (urlPath === '/') urlPath = '/index.html';
   if (urlPath.startsWith('/data/')) {                    // 存档目录不对外暴露
     res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });

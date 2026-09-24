@@ -143,6 +143,54 @@ async function visualChecks() {
     assert(document.querySelectorAll('#chat-log .chat-time').length === 2, '每条消息带时间戳');
     openChat('老队友');
     closeChat();
+    // V1.36：合作房间 —— 房间码校验、房间面板渲染、好友行「邀请进房」、邀请红点
+    visualSetup();
+    coopRoom = null; coopInvites = [];
+    renderCoop();
+    assert(!document.getElementById('coop-join').classList.contains('hidden')
+      && document.getElementById('coop-room').classList.contains('hidden'),
+      '不在房间里时显示「生成房间码 / 加入房间」');
+    assert(document.getElementById('coop-code').textContent === '------', '不在房间里时房间码是占位符');
+    assert(normCoopCode(' ab cd 23 ') === 'ABCD23' && coopCodeOk(' ab cd 23 '),
+      '房间码统一「去空白 + 大写」后再校验（从聊天里粘贴过来也能用）');
+    assert(coopCodeOk('ABCD23') && !coopCodeOk('ABCD2') && !coopCodeOk('ABCDE0')
+      && !coopCodeOk('ABCDEI') && !coopCodeOk('ab-cd23'),
+      '房间码必须是 6 位、字母表内（0 / I 等易混淆字符一律不合法）');
+    assert(coopInviteLink('ABCD23').indexOf('room=ABCD23') > 0, '邀请链接带上 ?room=<房间码>');
+    // 房主视角：两个席位，空席位有占位文案，好友行多一个「邀请进房」
+    friendData.friends = [{ username: '老队友', avatar: { kind: 'char' } }];
+    friendData.incoming = []; friendData.outgoing = [];
+    coopRoom = { code: 'ABCD23', host: '视觉测试', guest: null, hostReady: false, guestReady: false, hostAvatar: null, guestAvatar: null };
+    renderCoop();
+    assert(document.getElementById('coop-code').textContent === 'ABCD23', '房间码显示在房间面板上');
+    assert(document.querySelectorAll('#coop-players .coop-slot').length === 2
+      && !!document.querySelector('#coop-players .coop-slot.empty'), '房间面板给出两个席位，空席位有占位文案');
+    assert(document.getElementById('coop-ready').textContent === '准备'
+      && document.getElementById('coop-ready').disabled === false, '准备按钮可用');
+    assert(!!document.querySelector('#friend-list button[data-friend-act="coopInvite"]'),
+      '在房间里且还有空位时，好友行多一个「邀请进房」');
+    // 好友进房后：空席位消失，也不再显示「邀请进房」
+    coopRoom = { code: 'ABCD23', host: '视觉测试', guest: '老队友', hostReady: false, guestReady: true, hostAvatar: null, guestAvatar: null };
+    renderCoop();
+    assert(!document.querySelector('#coop-players .coop-slot.empty'), '好友进房后不再有空席位');
+    assert(!document.querySelector('#friend-list button[data-friend-act="coopInvite"]'),
+      '房间满了就不再显示「邀请进房」');
+    assert(document.getElementById('coop-ready').textContent === '准备', '自己还没准备时按钮显示「准备」');
+    // 收到的邀请：带「加入 / 忽略」，并计入首页红点
+    coopRoom = null;
+    coopInvites = [{ code: 'ZZZZ99', inviter: '老队友', avatar: null }];
+    renderCoop();
+    assert(document.querySelectorAll('#coop-invites .coop-invite').length === 1
+      && !!document.querySelector('#coop-invites button[data-coop-act="accept"]')
+      && !!document.querySelector('#coop-invites button[data-coop-act="decline"]'),
+      '收到的房间邀请带「加入 / 忽略」');
+    assert(!document.getElementById('friend-badge').classList.contains('hidden')
+      && document.getElementById('friend-badge').textContent === '1', '房间邀请也算首页红点');
+    coopRoom = null; coopInvites = [];
+    friendData.friends = []; friendData.incoming = []; friendData.outgoing = [];
+    renderCoop();
+    assert(document.getElementById('friend-badge').classList.contains('hidden'), '房间与邀请都清掉后红点隐藏');
+    assert(document.getElementById('coop-invites').classList.contains('hidden'), '没有邀请时邀请区收起');
     visualScene('home');
     const hero = document.getElementById('char-preview');
     assert(hero.getBoundingClientRect().width > 0, '首页角色预览');

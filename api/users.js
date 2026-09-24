@@ -7,7 +7,7 @@
 //   POST   /api/users  { user, createOnly:true }          -> 注册（无需令牌，主键判重），返回 { ok, token }
 //   POST   /api/users  { user }                          -> 改密（需令牌，只动密码列），返回 { ok, token }
 //   PATCH  /api/users  { username, meta, avatar }         -> 更新存档 + 公开头像（需令牌，不能用别人的名字）
-//   DELETE /api/users?username=<name>                     -> 删除账号（需令牌，只能删自己；顺带清 scores / friendships / messages）
+//   DELETE /api/users?username=<name>                     -> 删除账号（需令牌，只能删自己；顺带清 scores / friendships / messages / rooms）
 //
 // `avatar` 是**公开头像的副本**（好友列表要读别人的头像，而 meta 是隐私）：
 // 前端保存存档时顺带把 meta.avatar 写进 users.avatar 这一列，好友接口只读这一列。
@@ -157,6 +157,19 @@ async function deleteMessages(username) {
   });
 }
 
+// 删号时清掉合作房间：我建的房、我在别处的席位，以及两个方向的房间邀请。
+// 不清的话房里会留着一个已经登录不上的名字，好友那边也还挂着一个点不进去的邀请。
+async function deleteRooms(username) {
+  await sbFetch(`rooms?or=(host.eq.${eq(username)},guest.eq.${eq(username)})`, {
+    method: 'DELETE',
+    headers: headers({ Prefer: 'return=minimal' }),
+  });
+  await sbFetch(`room_invites?or=(inviter.eq.${eq(username)},invitee.eq.${eq(username)})`, {
+    method: 'DELETE',
+    headers: headers({ Prefer: 'return=minimal' }),
+  });
+}
+
 function send(res, code, payload) {
   res.statusCode = code;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -255,6 +268,7 @@ module.exports = async function handler(req, res) {
       await deleteScore(username);      // 顺带清掉榜单记录，避免删号后还挂在排行榜上
       await deleteFriendships(username);   // 以及好友关系，避免留下指向已删账号的孤儿行
       await deleteMessages(username);      // 还有两个方向的私聊消息（同上）
+      await deleteRooms(username);         // 以及我建的房间 / 我的席位 / 两个方向的房间邀请
       send(res, 200, { ok: true });
       return;
     }

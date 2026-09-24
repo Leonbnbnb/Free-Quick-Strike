@@ -452,14 +452,33 @@
 
         <div class="sec-title">合作房间</div>
         <div class="coop-box">
-          <div class="coop-row">
+          <!-- 收到的房间邀请：好友在房间里点「邀请进房」后出现在这里 -->
+          <div id="coop-invites" class="coop-invites"></div>
+
+          <!-- 不在房间里：建房 / 输入房间码加入 -->
+          <div id="coop-join" class="coop-join">
             <button id="coop-create" class="ghost" type="button">生成房间码</button>
-            <button id="coop-copy" class="ghost" type="button" disabled>复制邀请</button>
+            <div class="coop-row">
+              <input id="coop-input" type="text" placeholder="输入房间码" maxlength="6" autocomplete="off" inputmode="latin" aria-label="房间码">
+              <button id="coop-join-btn" class="ghost" type="button">加入房间</button>
+            </div>
           </div>
-          <div class="coop-row">
-            <input id="coop-input" type="text" placeholder="输入房间码" maxlength="6" autocomplete="off" inputmode="latin" aria-label="房间码">
-            <button id="coop-join" class="ghost" type="button">加入房间</button>
+
+          <!-- 已经在房间里：房间码 + 双方席位 + 准备 / 离开 -->
+          <div id="coop-room" class="coop-room hidden">
+            <div class="coop-code-row">
+              <span class="dim">房间码</span>
+              <strong id="coop-code" class="coop-code">------</strong>
+              <button id="coop-copy" class="ghost" type="button">复制邀请</button>
+            </div>
+            <div id="coop-players" class="coop-players"></div>
+            <div class="coop-row">
+              <button id="coop-ready" class="ghost" type="button">准备</button>
+              <button id="coop-leave" class="ghost danger" type="button">离开房间</button>
+            </div>
           </div>
+
+          <p class="dim coop-note">房间已可创建、邀请与加入；双人对局同步开发中，暂时只能在房间里就位。</p>
           <p id="coop-status" class="dim coop-status" role="status"></p>
         </div>
       </div>

@@ -962,6 +962,100 @@ button:disabled {
   font-weight: 700;
 }
 
+/* V1.36：合作房间 —— 建房 / 房间面板 / 收到的邀请 */
+.coop-join > button {
+  width: 100%;
+}
+
+.coop-join .coop-row {
+  margin-top: 8px;
+}
+
+.coop-room > .coop-row {
+  margin-top: 10px;
+}
+
+.coop-code-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.coop-code-row .coop-code {
+  flex: 1;
+}
+
+.coop-players {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.coop-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+}
+
+.coop-slot.empty {
+  color: var(--muted);
+  font-size: 12px;
+  justify-content: center;
+}
+
+.coop-slot-info {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+  min-width: 0;
+}
+
+.coop-slot-info strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coop-slot-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.coop-invites {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.coop-invite {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--gold) 40%, var(--line));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--gold) 8%, transparent);
+}
+
+.coop-invite-text {
+  flex: 1;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.coop-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .sub-head {
   display: flex;
   align-items: center;

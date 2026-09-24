@@ -2949,13 +2949,17 @@ function enterGame(username, rawMeta) {
   meta = loadMetaFor(username, rawMeta);
   renderMenu();
   showMenu();
-  loadFriends();   // 主页右侧好友栏要显示好友头像与「未处理申请」的红点
+  renderCoop();    // 房间面板初始状态（不在房里 → 显示「生成房间码 / 加入房间」）
+  // 带 ?room=<code> 的邀请链接：自动打开好友面板并把房间码填进输入框（整次会话只处理一次）
+  if (!coopUrlHandled) { coopUrlHandled = true; coopHandleUrl(); }
+  loadFriends();   // 主页好友入口要显示「未处理申请 + 收到的房间邀请」的红点
 }
 
 function logout() {
   currentUser = null;
   meta = defaultMeta();
   friendData.friends = []; friendData.incoming = []; friendData.outgoing = [];   // 换账号，别把上一个人的好友带过来
+  coopRoom = null; coopInvites = [];   // 同理，房间与房间邀请也不能留给下一个账号
   setToken('');
   localStorage.removeItem('fury_current_user');
   showLogin();
@@ -11267,7 +11271,12 @@ function loadFriends() {
     return Promise.resolve(false);
   }
   return friendsApi()
-    .then(d => { applyFriends(d); friendStatus(''); return true; })
+    .then(d => {
+      applyFriends(d);
+      friendStatus('');
+      loadCoopInvites();   // 房间邀请也算首页红点，跟着好友一起刷
+      return true;
+    })
     .catch(err => {
       if (err && err.status === 401) { sessionExpired(); return false; }
       friendStatus(`好友列表加载失败：${(err && err.message) || err}`);
@@ -11333,11 +11342,11 @@ function friendRowEl(row, acts) {
   return el;
 }
 
-// 首页好友入口上的红点：未处理的好友申请条数（V1.35：入口从右侧常驻栏挪到设置齿轮下方）
+// 首页好友入口上的红点：未处理的好友申请条数 + 收到的房间邀请条数（V1.36）
 function renderFriendBadge() {
   const badge = document.getElementById('friend-badge');
   if (!badge) return;
-  const n = friendData.incoming.length;
+  const n = friendData.incoming.length + coopInvites.length;
   badge.textContent = n;
   badge.classList.toggle('hidden', n === 0);
 }
@@ -11375,7 +11384,7 @@ function renderFriends() {
       box.appendChild(p);
       return;
     }
-    rows.forEach(row => box.appendChild(friendRowEl(row, cfg.acts)));
+    rows.forEach(row => box.appendChild(friendRowEl(row, friendActsOf(kind))));
   });
 }
 
@@ -11384,9 +11393,14 @@ function openFriends() {
   const el = document.getElementById('friends');
   if (el) el.classList.remove('hidden');
   renderFriends();
-  if (friendsAvailable()) { friendStatus('加载中…'); loadFriends(); }
-  else friendStatus('好友功能需要联网账号，当前是离线存档');
+  renderCoop();
+  if (friendsAvailable()) { friendStatus('加载中…'); loadFriends(); refreshCoop(); }
+  else {
+    friendStatus('好友功能需要联网账号，当前是离线存档');
+    coopStatusSet('合作房间需要联网账号，当前是离线存档');
+  }
   startFriendsPolling();
+  startCoopPolling();
 }
 
 function closeFriends() {
@@ -11394,6 +11408,7 @@ function closeFriends() {
   const el = document.getElementById('friends');
   if (el) el.classList.add('hidden');
   stopFriendsPolling();
+  stopCoopPolling();
   closeChat();
   renderFriendBadge();
 }
@@ -11523,6 +11538,287 @@ function sendChat() {
     });
 }
 
+// ==================== 合作房间（V1.36） ====================
+// 本轮只做「房间系统」：建房 / 邀请好友 / 输入房间码加入 / 双方就绪。
+// **局内双人同步尚未实现** —— 双方都点「准备」也只是大厅里的状态位，不会真的开局。
+// 房间状态存在服务端（`/api/rooms`，见 api/rooms.js），前端只管渲染与发起操作；
+// 实时性用 3 秒轮询（面板开着才轮询），与好友 / 聊天同一套做法。
+//
+// 两个不变量，改之前先读：
+//   · **一个账号同时只在一个房间里** —— 建房 / 进房前服务端会先腾出我在别处的席位；
+//   · 房间码是 6 位、字母表已去掉 I / O / 0 / 1，前端只负责「去空白 + 大写」再校验。
+const COOP_CODE_LEN = 6;
+const COOP_CODE_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const COOP_POLL_MS = 3000;
+
+let coopRoom = null;      // 我当前所在房间的快照；null = 不在任何房间
+let coopInvites = [];     // 我收到的房间邀请
+let coopPollTimer = null;
+let coopUrlHandled = false;   // 邀请链接只处理一次，别每次回主页都把好友面板弹出来
+
+function coopAvailable() { return usesHttpStore(); }
+
+// 房间码统一「去空白 + 大写」：从聊天里粘贴过来、或手打带空格也能用
+function normCoopCode(v) { return String(v || '').replace(/\s+/g, '').toUpperCase(); }
+function coopCodeOk(v) {
+  const s = normCoopCode(v);
+  if (s.length !== COOP_CODE_LEN) return false;
+  for (const ch of s) if (COOP_CODE_ALPHA.indexOf(ch) < 0) return false;
+  return true;
+}
+
+function coopStatusSet(msg) {
+  const el = document.getElementById('coop-status');
+  if (el) el.textContent = msg || '';
+}
+
+function roomsApi(method, payload) {
+  const headers = {};
+  const t = token();
+  if (t) headers.Authorization = `Bearer ${t}`;
+  const init = { headers };
+  let qs = '';
+  if (method === 'POST') {
+    init.method = 'POST';
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(payload || {});
+  } else if (payload) {
+    qs = '?' + new URLSearchParams(payload).toString();
+  }
+  return fetch(`/api/rooms${qs}`, init).then(r => (r.ok ? r.json() : apiFail(r).then(e => Promise.reject(e))));
+}
+
+function coopFail(err, fallback) {
+  if (err && err.status === 401) { sessionExpired(); return; }
+  coopStatusSet((err && err.message) || fallback);
+}
+
+function applyRoom(room) {
+  coopRoom = room || null;
+  renderCoop();
+}
+
+// 邀请链接：带上 ?room=<code>，对方点开就在好友面板里看到房间码
+function coopInviteLink(code) {
+  return `${location.origin}${location.pathname}?room=${encodeURIComponent(code)}`;
+}
+
+function coopCreate() {
+  if (!coopAvailable()) { coopStatusSet('合作房间需要联网账号，当前是离线存档'); return; }
+  coopStatusSet('正在生成房间码…');
+  roomsApi('POST', { action: 'create' })
+    .then(d => {
+      applyRoom(d.room);
+      coopStatusSet(`房间已创建，把房间码 ${d.room.code} 发给好友，或点「复制邀请」发链接`);
+    })
+    .catch(err => coopFail(err, '生成房间码失败'));
+}
+
+function coopJoin(code) {
+  const c = normCoopCode(code);
+  if (!coopCodeOk(c)) { coopStatusSet('请输入 6 位房间码'); return; }
+  if (!coopAvailable()) { coopStatusSet('合作房间需要联网账号，当前是离线存档'); return; }
+  coopStatusSet('正在加入房间…');
+  roomsApi('POST', { action: 'join', code: c })
+    .then(d => {
+      applyRoom(d.room);
+      coopInvites = coopInvites.filter(i => i.code !== c);
+      coopStatusSet('已加入房间，等房主准备好');
+    })
+    .catch(err => coopFail(err, '加入失败'));
+}
+
+function coopLeave() {
+  if (!coopRoom) return;
+  const code = coopRoom.code;
+  const host = coopRoom.host === currentUser;
+  coopStatusSet('正在离开房间…');
+  roomsApi('POST', { action: 'leave', code })
+    .then(() => { applyRoom(null); coopStatusSet(host ? '已解散房间' : '已离开房间'); })
+    .catch(err => coopFail(err, '离开失败'));
+}
+
+function coopToggleReady() {
+  if (!coopRoom) return;
+  const mineReady = coopRoom.host === currentUser ? coopRoom.hostReady : coopRoom.guestReady;
+  roomsApi('POST', { action: 'ready', code: coopRoom.code, ready: !mineReady })
+    .then(d => { applyRoom(d.room); })
+    .catch(err => coopFail(err, '操作失败'));
+}
+
+// 复制邀请：优先写剪贴板（失败就退化成提示手工转发房间码，没有剪贴板 API 的浏览器同理）
+function coopCopyInvite() {
+  if (!coopRoom) return;
+  const link = coopInviteLink(coopRoom.code);
+  const manual = () => coopStatusSet(`复制失败，请手动转发房间码 ${coopRoom.code}`);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(link).then(
+      () => coopStatusSet('邀请链接已复制，发给好友即可进房'),
+      manual,
+    );
+  } else manual();
+}
+
+// 邀请好友进房：只能邀已经是好友的人，且房间还空着（服务端还会再判一次）
+function coopInvite(username) {
+  if (!coopRoom) { coopStatusSet('先创建或加入一个房间，再邀请好友'); return; }
+  if (coopRoom.guest) { coopStatusSet('房间已经满了'); return; }
+  const code = coopRoom.code;
+  roomsApi('POST', { action: 'invite', code, username })
+    .then(() => coopStatusSet(`已邀请 ${username} 进入房间 ${code}`))
+    .catch(err => coopFail(err, '邀请失败'));
+}
+
+function coopDecline(code) {
+  roomsApi('POST', { action: 'decline', code })
+    .then(() => {
+      coopInvites = coopInvites.filter(i => i.code !== code);
+      renderCoop();
+      coopStatusSet('已忽略该邀请');
+    })
+    .catch(err => coopFail(err, '操作失败'));
+}
+
+// 一个席位（房主 / 访客）。空席位给一句话占位，别让面板看起来是坏的。
+function coopSlotEl(name, avatar, mine, ready, isHost) {
+  const el = document.createElement('div');
+  el.className = 'coop-slot' + (name ? '' : ' empty');
+  if (!name) { el.textContent = '等待好友加入…'; return el; }
+  el.appendChild(avatarCanvasOf(34, avatar, defaultCharacter()));
+  const info = document.createElement('div');
+  info.className = 'coop-slot-info';
+  const nm = document.createElement('strong');
+  nm.textContent = name + (mine ? '（我）' : '');     // 名字来自别的账号，一律 textContent
+  const sub = document.createElement('span');
+  sub.className = 'coop-slot-sub';
+  sub.textContent = (isHost ? '房主 · ' : '') + (ready ? '已准备' : '未准备');
+  info.appendChild(nm);
+  info.appendChild(sub);
+  el.appendChild(info);
+  return el;
+}
+
+function coopInviteEl(inv) {
+  const el = document.createElement('div');
+  el.className = 'coop-invite';
+  el.appendChild(avatarCanvasOf(30, inv.avatar, defaultCharacter()));
+  const txt = document.createElement('span');
+  txt.className = 'coop-invite-text';
+  txt.textContent = `${inv.inviter} 邀请你加入房间 ${inv.code}`;
+  el.appendChild(txt);
+  [{ act: 'accept', label: '加入' }, { act: 'decline', label: '忽略', danger: true }].forEach(a => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = a.danger ? 'ghost danger' : 'ghost';
+    b.dataset.coopAct = a.act;
+    b.dataset.coopCode = inv.code;
+    b.textContent = a.label;
+    el.appendChild(b);
+  });
+  return el;
+}
+
+function renderCoop() {
+  const inRoom = !!coopRoom;
+  const joinBox = document.getElementById('coop-join');
+  const roomBox = document.getElementById('coop-room');
+  if (joinBox) joinBox.classList.toggle('hidden', inRoom);
+  if (roomBox) roomBox.classList.toggle('hidden', !inRoom);
+
+  const codeEl = document.getElementById('coop-code');
+  if (codeEl) codeEl.textContent = inRoom ? coopRoom.code : '------';
+
+  const players = document.getElementById('coop-players');
+  if (players) {
+    players.innerHTML = '';
+    if (inRoom) {
+      const mineHost = coopRoom.host === currentUser;
+      players.appendChild(coopSlotEl(coopRoom.host, coopRoom.hostAvatar, mineHost, coopRoom.hostReady, true));
+      players.appendChild(coopSlotEl(coopRoom.guest, coopRoom.guestAvatar, !mineHost, coopRoom.guestReady, false));
+    }
+  }
+
+  const readyBtn = document.getElementById('coop-ready');
+  if (readyBtn) {
+    const mineReady = inRoom && (coopRoom.host === currentUser ? coopRoom.hostReady : coopRoom.guestReady);
+    readyBtn.textContent = mineReady ? '取消准备' : '准备';
+    readyBtn.disabled = !inRoom;
+  }
+
+  const invBox = document.getElementById('coop-invites');
+  if (invBox) {
+    invBox.innerHTML = '';
+    coopInvites.forEach(inv => invBox.appendChild(coopInviteEl(inv)));
+    invBox.classList.toggle('hidden', !coopInvites.length);
+  }
+
+  renderFriendBadge();   // 房间邀请也算红点
+  renderFriends();       // 在房间里且还有空位时，好友行多一个「邀请进房」
+}
+
+// 在房间里、且还没坐满时才能邀请（与 api/rooms.js 的判定一致）
+function coopCanInvite() { return !!(coopRoom && !coopRoom.guest); }
+
+function friendActsOf(kind) {
+  const cfg = FRIEND_LISTS[kind];
+  if (kind === 'friends' && coopCanInvite()) return [{ act: 'coopInvite', label: '邀请进房' }].concat(cfg.acts);
+  return cfg.acts;
+}
+
+function applyCoop(d) {
+  coopInvites = (d && Array.isArray(d.invites)) ? d.invites : [];
+  renderCoop();
+}
+
+// 只拉「我收到的邀请」：进主页时也要红点，不必等面板打开
+function loadCoopInvites() {
+  if (!coopAvailable()) { coopInvites = []; renderCoop(); return Promise.resolve(false); }
+  return roomsApi('GET', { invites: '1' })
+    .then(d => { applyCoop(d); return true; })
+    .catch(err => {
+      if (err && err.status === 401) { sessionExpired(); return false; }
+      return false;
+    });
+}
+
+// 面板开着时的轮询：好友进房 / 房间被解散 / 收到邀请，都不用手动刷新
+function refreshCoop() {
+  if (!coopAvailable()) return Promise.resolve(false);
+  const jobs = [roomsApi('GET', { invites: '1' }).then(applyCoop).catch(() => {})];
+  if (coopRoom) {
+    const code = coopRoom.code;
+    jobs.push(roomsApi('GET', { code }).then(d => {
+      if (!d || !d.room) {
+        if (coopRoom && coopRoom.code === code) { applyRoom(null); coopStatusSet('房间已解散'); }
+      } else applyRoom(d.room);
+    }).catch(() => {}));
+  }
+  return Promise.all(jobs);
+}
+
+function startCoopPolling() {
+  stopCoopPolling();
+  if (!coopAvailable()) return;
+  coopPollTimer = setInterval(() => { if (friendsOpen) refreshCoop(); }, COOP_POLL_MS);
+}
+
+function stopCoopPolling() {
+  if (coopPollTimer) { clearInterval(coopPollTimer); coopPollTimer = null; }
+}
+
+// 邀请链接 `?room=ABCD23`：登录进主页时自动打开好友面板、把房间码填进输入框
+function coopHandleUrl() {
+  let raw = '';
+  try { raw = new URLSearchParams(location.search).get('room') || ''; } catch (e) { raw = ''; }
+  const code = normCoopCode(raw);
+  if (!coopCodeOk(code)) return false;
+  const input = document.getElementById('coop-input');
+  if (input) input.value = code;
+  if (coopAvailable()) openFriends();
+  coopStatusSet(`邀请链接：房间码 ${code}，点「加入房间」进入`);
+  return true;
+}
+
 document.getElementById('btn-friends').onclick = openFriends;
 document.getElementById('chat-close').onclick = () => {
   closeChat();
@@ -11550,12 +11846,30 @@ document.getElementById('friend-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') addFriendFromInput();
 });
 
-// 好友列表里的 同意 / 拒绝 / 撤回 / 删除（事件委托，行是动态生成的）
+// 好友 / 房间这类「别人发起、我这边要看到」的行：事件委托（行都是动态生成的）
+// 邀请进房（好友行）与 加入 / 忽略（收到的房间邀请）都走这里，其余交给 friendAction。
 document.getElementById('friends').addEventListener('click', e => {
+  const coop = e.target.closest('button[data-coop-act]');
+  if (coop) {
+    if (coop.dataset.coopAct === 'accept') coopJoin(coop.dataset.coopCode);
+    else coopDecline(coop.dataset.coopCode);
+    return;
+  }
   const btn = e.target.closest('button[data-friend-act]');
   if (!btn) return;
+  if (btn.dataset.friendAct === 'coopInvite') { coopInvite(btn.dataset.friendName); return; }
   friendAction(btn.dataset.friendAct, btn.dataset.friendName);
 });
+
+// 合作房间：建房 / 加入 / 复制邀请 / 准备 / 离开
+document.getElementById('coop-create').onclick = coopCreate;
+document.getElementById('coop-copy').onclick = coopCopyInvite;
+document.getElementById('coop-join-btn').onclick = () => coopJoin(document.getElementById('coop-input').value);
+document.getElementById('coop-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') coopJoin(document.getElementById('coop-input').value);
+});
+document.getElementById('coop-ready').onclick = coopToggleReady;
+document.getElementById('coop-leave').onclick = coopLeave;
 
 // 标签切换
 document.querySelectorAll('.tab').forEach(btn => {

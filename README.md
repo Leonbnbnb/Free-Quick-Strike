@@ -20,7 +20,7 @@
 - **局外养成**：金币解锁 **武器 / 护甲 / 饰品 ×2**（四个独立槽位；**装备页是「装备台 → 候选列表 → 铁砧洗练」三级视图** —— 中间实时渲染角色、两侧四个栏位，点「铁砧」进洗练页，上方是这件装备自己的特写；每件最多 **3 条词条**：解锁只给第 1 条，累计**洗练** 5 / 15 次解锁第 2 / 3 条；词条数值分 T1~T3 三档、可**锁定**单条保留，护甲 / 饰品单次 200 金币起、**武器 400 起**；武器另有一套**专属词条**「迅捷 / 疾弹 / 远射 / 贯穿」）；宠物改为**开蛋** —— 有概率直接孵出，否则给该宠物的**能量碎片**（龙魂 / 火元素 / 雷元素 / 冰元素），攒满 **100 手动合成**；宠物另有等级（熟练度）、升星、随机词条与专属天赋树（技能节点提供「专精」加成，技能本体由局内三选一决定），**宠物页与装备页同一套三级视图**
 - **新手阶段**：第一次冒险会走一段**五步引导**（移动 → 拾取经验 → 第一次升级 → 暂停 → 主动技能，可随时点 ✕ 跳过）；**前 3 波出怪更稀、伤害更低**，第一次升级落在第 20 秒上下；**敌人技能在受击前有 ≥0.5 秒可视预警**（远程蓄能光点 + 瞄准线、首领弹幕蓄能环、精英近战红扇环）；局内 HUD 有「剩余敌人 / 下次精英倒计时 / 首领倒计时」，结算页会写出**具体阵亡原因**与本局**学到的机制**
 - **排行榜**：主菜单按账号最久波次排名，成绩实时推送（Supabase Realtime，连不上自动降级为轮询），方便与好友竞技
-- **好友与头像**：**入口在主页设置齿轮正下方**（好友图标 + 收到申请时的红点徽章），点开就是一个独立的**好友界面** —— 加好友输入框、收到的申请 / 已发出的申请 / 好友三张列表（头像 + 名字）、**双击好友行打开聊天框**（真实好友关系存服务端，双方互相申请直接成为好友）。头像 11 款 —— 「用角色外观」+ 10 种复用已有怪物模型，角色页可选并可预览。双人合作的房间码入口已在界面预留（同步玩法开发中）
+- **好友与头像**：**入口在主页设置齿轮正下方**（好友图标 + 收到申请时的红点徽章），点开就是一个独立的**好友界面** —— 加好友输入框、收到的申请 / 已发出的申请 / 好友三张列表（头像 + 名字）、**双击好友行打开聊天框**（真实好友关系存服务端，双方互相申请直接成为好友）。头像 11 款 —— 「用角色外观」+ 10 种复用已有怪物模型，角色页可选并可预览。界面底部是**合作房间**：**生成 6 位房间码**（字母表已去掉 `I / O / 0 / 1`）、**复制邀请链接**（对方点开自动填好房间码）、**输入房间码加入**、房间里显示**双方席位与「已准备」状态**，好友列表里还能直接点「邀请进房」、被邀请方收到「加入 / 忽略」提示。**双人对局的同步玩法仍在开发中**，目前房间只能就位
 - **美术与界面**：主菜单设置内可选择原始精简、暮色森林、霓虹街机、暖纸手绘、深海星夜五种主题，随账号保存，仅局外可改，不影响局内花草建筑；角色可选 **福瑞 / 牛来** 两个物种，带摇尾、呼吸、眨眼和抖耳动画，宠物按养成进度切换**幼体 / 成体 / 究极体**三档外观（究极体带光环、符文与王冠），4 把武器与各自子弹各有独立模型；怪物按职能使用专属轮廓与道具，支持横屏双栏、精简环境特效及减少动态效果偏好
 
 ## 运行
@@ -40,13 +40,13 @@ node server.js
 # 浏览器打开 http://localhost:8080
 ```
 
-`server.js` 同时提供 `/api/users`（账号存档，落盘 `data/users.json`）、`/api/leaderboard`（排行榜，落盘 `data/scores.json`）、`/api/friends`（好友关系，落盘 `data/friendships.json`）与 `/api/chat`（好友私聊，落盘 `data/messages.json`）；若只是纯静态托管，存档会自动退回浏览器 localStorage。
+`server.js` 同时提供 `/api/users`（账号存档，落盘 `data/users.json`）、`/api/leaderboard`（排行榜，落盘 `data/scores.json`）、`/api/friends`（好友关系，落盘 `data/friendships.json`）、`/api/chat`（好友私聊，落盘 `data/messages.json`）与 `/api/rooms`（合作房间，落盘 `data/rooms.json` + `data/room-invites.json`）；若只是纯静态托管，存档会自动退回浏览器 localStorage。
 
 ### 线上版（Vercel + Supabase）
 
 前端静态资源托管在 Vercel，账号与排行榜由 Serverless Function 写入 Supabase。
 
-1. 在 Supabase 建项目，按顺序执行 `supabase/migrations/` 下的六个脚本（`users` 表、`scores` 表 + Realtime、`password_hash` 列、`submit_score` 合理性校验、`friendships` 表 + `users.avatar` 列、`messages` 表）。**漏跑会让接口 500 而不是 404**，核对办法见 [docs/部署流程.md](docs/部署流程.md) 的验证清单。
+1. 在 Supabase 建项目，按顺序执行 `supabase/migrations/` 下的七个脚本（`users` 表、`scores` 表 + Realtime、`password_hash` 列、`submit_score` 合理性校验、`friendships` 表 + `users.avatar` 列、`messages` 表、`rooms` + `room_invites` 表）。**漏跑会让接口 500 而不是 404**，核对办法见 [docs/部署流程.md](docs/部署流程.md) 的验证清单。
 2. 在 Vercel 项目的 Settings → Environment Variables 配置（**不要**提交到仓库，三个环境都要勾）：
    - `SUPABASE_URL`：Supabase 项目 URL，形如 `https://<project-ref>.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY`：secret / service_role 密钥，仅服务端使用
@@ -70,19 +70,22 @@ js/game.js                 全部游戏逻辑与渲染（单文件，约 11330 �
 assets/forest.svg          原创暮色森林矢量场景（离线可用）
 tests/visual-smoke.html    浏览器视觉回归测试台（内存存档，不写入账号文件）
 tests/visual-smoke.js      战斗、主题存档、动画与飞剑残影回归检查
-server.js                  开发用静态服务器 + 账号 / 排行榜 / 好友 / 聊天 API
+server.js                  开发用静态服务器 + 账号 / 排行榜 / 好友 / 聊天 / 合作房间 API
 api/users.js               线上账号接口（Vercel Serverless，PBKDF2 哈希 + 服务端校验 + 会话令牌）
 api/leaderboard.js         线上排行榜接口（需令牌，读榜 / 提交成绩，下发 Realtime 连接信息）
 api/friends.js             线上好友接口（需令牌，好友申请 / 接受 / 拒绝 / 删除；附带头像公开副本）
 api/chat.js                线上私聊接口（需令牌，只有互为好友才能收发；不下发自己的用户名）
+api/rooms.js               线上合作房间接口（需令牌，建房 / 加入 / 就位 / 邀请 / 离开）
 api/_auth.js               会话令牌的签发与校验（下划线开头不会被暴露成接口）
-supabase/migrations/       建表脚本：users、scores + Realtime、password_hash、submit_score 校验、friendships + users.avatar、messages
+supabase/migrations/       建表脚本：users、scores + Realtime、password_hash、submit_score 校验、friendships + users.avatar、messages、rooms + room_invites
 electron/main.js           主进程入口
 electron/preload.js        存档读写桥接
 data/users.json            账号存档（运行时生成）
 data/scores.json           排行榜存档（本地开发，运行时生成）
 data/friendships.json      好友关系存档（本地开发，运行时生成）
 data/messages.json         好友私聊存档（本地开发，运行时生成）
+data/rooms.json            合作房间存档（本地开发，运行时生成）
+data/room-invites.json     房间邀请存档（本地开发，运行时生成）
 AGENTS.md                  协作约定：改完代码必须同步下面两个文档
 docs/需求方案.md           需求文档：当前实现的权威说明（机制 / 数值 / 卡池 / 进化 / 平衡）
 docs/更新日志.md           更新日志：每次较大改动的简要叙述（加强了什么、削弱了什么）
