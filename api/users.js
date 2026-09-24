@@ -7,7 +7,7 @@
 //   POST   /api/users  { user, createOnly:true }          -> 注册（无需令牌，主键判重），返回 { ok, token }
 //   POST   /api/users  { user }                          -> 改密（需令牌，只动密码列），返回 { ok, token }
 //   PATCH  /api/users  { username, meta, avatar }         -> 更新存档 + 公开头像（需令牌，不能用别人的名字）
-//   DELETE /api/users?username=<name>                     -> 删除账号（需令牌，只能删自己）
+//   DELETE /api/users?username=<name>                     -> 删除账号（需令牌，只能删自己；顺带清 scores / friendships / messages）
 //
 // `avatar` 是**公开头像的副本**（好友列表要读别人的头像，而 meta 是隐私）：
 // 前端保存存档时顺带把 meta.avatar 写进 users.avatar 这一列，好友接口只读这一列。
@@ -148,6 +148,15 @@ async function deleteFriendships(username) {
   });
 }
 
+// 删号时把两个方向的私聊消息也删掉（messages 同样是「一行一条 + 两列方向」）。
+// 不清的话会留下指向已删账号的孤儿行：占空间，而且对方那边读会话时还会看到它们。
+async function deleteMessages(username) {
+  await sbFetch(`messages?or=(from_user.eq.${eq(username)},to_user.eq.${eq(username)})`, {
+    method: 'DELETE',
+    headers: headers({ Prefer: 'return=minimal' }),
+  });
+}
+
 function send(res, code, payload) {
   res.statusCode = code;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -245,6 +254,7 @@ module.exports = async function handler(req, res) {
       await deleteUser(username);
       await deleteScore(username);      // 顺带清掉榜单记录，避免删号后还挂在排行榜上
       await deleteFriendships(username);   // 以及好友关系，避免留下指向已删账号的孤儿行
+      await deleteMessages(username);      // 还有两个方向的私聊消息（同上）
       send(res, 200, { ok: true });
       return;
     }

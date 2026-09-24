@@ -190,6 +190,8 @@ async function handleUsersApi(req, res) {
     writeScores(readScores().filter(x => x.username !== username));
     // 以及好友关系（两个方向），避免留下指向已删账号的孤儿行
     writeFriends(readFriends().filter(x => x.requester !== username && x.addressee !== username));
+    // 还有两个方向的私聊消息（同上）
+    writeMessages(readMessages().filter(x => x.from !== username && x.to !== username));
     sendJson(res, 200, { ok: true });
     return;
   }

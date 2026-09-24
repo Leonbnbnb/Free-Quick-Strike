@@ -40,13 +40,13 @@ node server.js
 # 浏览器打开 http://localhost:8080
 ```
 
-`server.js` 同时提供 `/api/users`（账号存档，落盘 `data/users.json`）、`/api/leaderboard`（排行榜，落盘 `data/scores.json`）与 `/api/friends`（好友关系，落盘 `data/friendships.json`）；若只是纯静态托管，存档会自动退回浏览器 localStorage。
+`server.js` 同时提供 `/api/users`（账号存档，落盘 `data/users.json`）、`/api/leaderboard`（排行榜，落盘 `data/scores.json`）、`/api/friends`（好友关系，落盘 `data/friendships.json`）与 `/api/chat`（好友私聊，落盘 `data/messages.json`）；若只是纯静态托管，存档会自动退回浏览器 localStorage。
 
 ### 线上版（Vercel + Supabase）
 
 前端静态资源托管在 Vercel，账号与排行榜由 Serverless Function 写入 Supabase。
 
-1. 在 Supabase 建项目，按顺序执行 `supabase/migrations/` 下的五个脚本（`users` 表、`scores` 表 + Realtime、`password_hash` 列、`submit_score` 合理性校验、`friendships` 表 + `users.avatar` 列）。
+1. 在 Supabase 建项目，按顺序执行 `supabase/migrations/` 下的六个脚本（`users` 表、`scores` 表 + Realtime、`password_hash` 列、`submit_score` 合理性校验、`friendships` 表 + `users.avatar` 列、`messages` 表）。**漏跑会让接口 500 而不是 404**，核对办法见 [docs/部署流程.md](docs/部署流程.md) 的验证清单。
 2. 在 Vercel 项目的 Settings → Environment Variables 配置（**不要**提交到仓库，三个环境都要勾）：
    - `SUPABASE_URL`：Supabase 项目 URL，形如 `https://<project-ref>.supabase.co`
    - `SUPABASE_SERVICE_ROLE_KEY`：secret / service_role 密钥，仅服务端使用
@@ -70,17 +70,19 @@ js/game.js                 全部游戏逻辑与渲染（单文件，约 11330 �
 assets/forest.svg          原创暮色森林矢量场景（离线可用）
 tests/visual-smoke.html    浏览器视觉回归测试台（内存存档，不写入账号文件）
 tests/visual-smoke.js      战斗、主题存档、动画与飞剑残影回归检查
-server.js                  开发用静态服务器 + 账号 / 排行榜 / 好友 API
+server.js                  开发用静态服务器 + 账号 / 排行榜 / 好友 / 聊天 API
 api/users.js               线上账号接口（Vercel Serverless，PBKDF2 哈希 + 服务端校验 + 会话令牌）
 api/leaderboard.js         线上排行榜接口（需令牌，读榜 / 提交成绩，下发 Realtime 连接信息）
 api/friends.js             线上好友接口（需令牌，好友申请 / 接受 / 拒绝 / 删除；附带头像公开副本）
+api/chat.js                线上私聊接口（需令牌，只有互为好友才能收发；不下发自己的用户名）
 api/_auth.js               会话令牌的签发与校验（下划线开头不会被暴露成接口）
-supabase/migrations/       建表脚本：users、scores + Realtime、password_hash、submit_score 校验、friendships + users.avatar
+supabase/migrations/       建表脚本：users、scores + Realtime、password_hash、submit_score 校验、friendships + users.avatar、messages
 electron/main.js           主进程入口
 electron/preload.js        存档读写桥接
 data/users.json            账号存档（运行时生成）
 data/scores.json           排行榜存档（本地开发，运行时生成）
 data/friendships.json      好友关系存档（本地开发，运行时生成）
+data/messages.json         好友私聊存档（本地开发，运行时生成）
 AGENTS.md                  协作约定：改完代码必须同步下面两个文档
 docs/需求方案.md           需求文档：当前实现的权威说明（机制 / 数值 / 卡池 / 进化 / 平衡）
 docs/更新日志.md           更新日志：每次较大改动的简要叙述（加强了什么、削弱了什么）
