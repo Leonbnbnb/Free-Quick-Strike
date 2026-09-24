@@ -17,6 +17,9 @@
       <svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></svg>
     </button>
 
+    <!-- 自动攻击目标优先级（V1.31）：点一下循环切换 最近 / 最强 / 首领优先 / 精英优先，按 Tab 同效 -->
+    <button id="btn-aim" class="ingame-btn aim-btn hidden" title="切换自动攻击目标（Tab）" aria-label="切换自动攻击目标">最近</button>
+
     <!-- 主动技能（右下角） -->
     <div class="skill-bar">
       <button id="skill-slow" class="skill-btn hidden" title="时缓">时缓</button>
@@ -65,6 +68,7 @@
             <button id="dev-clear" class="ghost">清空场上敌人</button>
           </div>
           <label class="dev-check"><input type="checkbox" id="dev-freeze-wave"> 冻结波次计时</label>
+          <label class="dev-check"><input type="checkbox" id="dev-no-spawn"> 停止刷怪（波次计时一并停）</label>
           <div class="dev-grid">
             <button id="dev-elite-group" class="ghost">刷一群精英</button>
             <button id="dev-boss-now" class="ghost">立刻出 Boss</button>
@@ -117,6 +121,12 @@
           </div>
           <label class="dev-check"><input type="checkbox" id="dev-spawn-static"> 站桩（不移动）</label>
           <label class="dev-check"><input type="checkbox" id="dev-spawn-peace"> 停手（不造成伤害）</label>
+          <p class="dev-note dev-note-tight">怪物无敌（伤害数值照常显示，不掉血、不破盾）</p>
+          <div class="dev-grid">
+            <label class="dev-check"><input type="checkbox" id="dev-god-mob"> 小怪无敌</label>
+            <label class="dev-check"><input type="checkbox" id="dev-god-elite"> 精英无敌</label>
+            <label class="dev-check"><input type="checkbox" id="dev-god-boss"> Boss 无敌</label>
+          </div>
           <button id="dev-spawn-go" class="ghost">刷出</button>
           <div class="dev-grid">
             <button id="dev-mark-static" class="ghost">全场切换站桩</button>
@@ -133,6 +143,10 @@
           </div>
           <div class="dev-chips" id="dev-card-cats"></div>
           <div id="dev-card-list" class="dev-card-list"></div>
+          <div class="dev-grid">
+            <button id="dev-card-apply" class="ghost">应用选中</button>
+            <button id="dev-card-clear" class="ghost">取消选择</button>
+          </div>
           <p class="dev-note" id="dev-card-count"></p>
         </div>
 
@@ -147,6 +161,11 @@
             <strong id="dev-self-hp">—</strong>
             <span class="dev-dim" id="dev-self-sum">LV1 · 敌 0</span>
           </div>
+          <div class="dev-row">
+            <span>实时 DPS</span>
+            <strong id="dev-self-dps">0/s</strong>
+            <span class="dev-dim" id="dev-self-dps-peak">峰值 0/s</span>
+          </div>
           <div class="dev-grid">
             <button id="dev-soldier-add" class="ghost">士兵 +1</button>
             <button id="dev-soldier-del" class="ghost">士兵 −1</button>
@@ -160,6 +179,7 @@
             <button id="dev-pause" class="ghost">暂停 / 继续</button>
             <button id="dev-step" class="ghost">单步 1 帧</button>
           </div>
+          <label class="dev-check"><input type="checkbox" id="dev-pause-upgrade"> 允许暂停中升级（选完卡回到暂停）</label>
           <label class="dev-check"><input type="checkbox" id="dev-info-toggle"> 显示调试信息浮层</label>
         </div>
       </div>
@@ -201,9 +221,21 @@
                 <svg viewBox="0 0 24 24" class="coin-ico"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10h5M9.5 14h5"/></svg>
                 <span id="coin-count">0</span>
               </button>
-              <button class="tab icon-btn" data-tab="setting" title="设置">
-                <svg viewBox="0 0 24 24" class="nav-ico"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
-              </button>
+              <!-- V1.35：设置齿轮正下方再加一个好友入口（竖排），首页其余 UI 不动 -->
+              <div class="head-stack">
+                <button class="tab icon-btn" data-tab="setting" title="设置">
+                  <svg viewBox="0 0 24 24" class="nav-ico"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+                </button>
+                <button class="icon-btn friend-entry" id="btn-friends" type="button" title="好友" aria-label="好友">
+                  <svg viewBox="0 0 24 24" class="nav-ico" aria-hidden="true">
+                    <circle cx="9" cy="8" r="3.3"/>
+                    <path d="M3.4 19.6c0-3.1 2.5-5.1 5.6-5.1s5.6 2 5.6 5.1"/>
+                    <path d="M15.8 5.5a3.3 3.3 0 0 1 0 5.5"/>
+                    <path d="M17.4 14.9c1.9.7 3.2 2.3 3.2 4.7"/>
+                  </svg>
+                  <span class="friend-badge hidden" id="friend-badge">0</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -221,6 +253,7 @@
           </button>
 
           <div class="mission-strip"><span class="mission-symbol" aria-hidden="true">✧</span><div><strong>暮色森林</strong><span>无尽生存 · 每 10 波迎战首领</span></div><span class="mission-status">探索中</span></div>
+          <div class="mode-pick" id="mode-pick" role="radiogroup" aria-label="游戏模式"></div>
           <button id="btn-play" class="btn-primary">开始游戏</button>
 
           <p class="dim home-best">最高纪录 <strong id="best-wave">0</strong> 波 <span>·</span> 每一局，都是新的可能</p>
@@ -259,37 +292,22 @@
           </div>
         </div>
 
-        <!-- 装备 -->
+        <!-- 装备（V1.35：装备台 / 选择装备 / 铁砧强化 · 词条洗练 三级视图，内容全部由 renderEquipPage 渲染） -->
         <div id="tab-equip" class="tab-panel">
           <div class="sub-head">
-            <h3>装备</h3>
-            <button class="tab nav-back" data-tab="home">返回</button>
+            <h3 id="equip-title">装备</h3>
+            <button class="tab nav-back" id="equip-back" data-tab="home">返回</button>
           </div>
-          <div class="sec-title">武器</div>
-          <div id="list-weapons"></div>
-          <div class="sec-title">护甲 / 饰品</div>
-          <div id="list-equipment"></div>
-          <div class="sec-title">物品</div>
-          <div id="list-items"></div>
+          <div id="equip-body"></div>
         </div>
 
-        <!-- 宠物 -->
+        <!-- 宠物（V1.35：与装备同一套三级视图） -->
         <div id="tab-pet" class="tab-panel">
           <div class="sub-head">
-            <h3>宠物养成</h3>
-            <button class="tab nav-back" data-tab="home">返回</button>
+            <h3 id="pet-title">宠物</h3>
+            <button class="tab nav-back" id="pet-back" data-tab="home">返回</button>
           </div>
-          <div class="char-stage" id="pet-stage">
-            <canvas id="pet-preview" width="240" height="180"></canvas>
-            <span class="char-tag" id="pet-tag">宠物预览</span>
-          </div>
-          <div class="opt-group">
-            <div class="opt-name">选择宠物</div>
-            <div class="chip-row" id="pet-select"></div>
-          </div>
-          <div id="pet-dev"></div>
-          <div class="sec-title">宠物解锁 / 装备</div>
-          <div id="list-pets"></div>
+          <div id="pet-body"></div>
         </div>
 
         <!-- 背包 -->
@@ -377,7 +395,7 @@
             <label class="setting-row">宠物 <select id="dev-pet"></select></label>
             <label class="setting-row">等级 <input type="number" id="dev-pet-lv" min="1" step="1" inputmode="numeric"></label>
             <label class="setting-row">星级 <input type="number" id="dev-pet-star" min="1" step="1" inputmode="numeric"></label>
-            <label class="setting-row">碎片 <input type="number" id="dev-pet-shards" min="0" step="1" inputmode="numeric"></label>
+            <label class="setting-row">能量碎片 <input type="number" id="dev-pet-shards" min="0" step="1" inputmode="numeric"></label>
             <button id="dev-apply-pet" class="ghost">应用宠物数据</button>
             <button id="dev-max-pet" class="ghost">宠物全部拉满</button>
 
@@ -387,6 +405,7 @@
             <textarea id="dev-json" class="dev-json" rows="4" spellcheck="false" aria-label="存档 JSON" placeholder="点「导出存档」把当前存档填进来，改完点「导入存档」覆盖"></textarea>
             <button id="dev-export" class="ghost">导出存档</button>
             <button id="dev-import" class="ghost">导入存档</button>
+            <button id="dev-restore-backup" class="ghost">恢复上次备份</button>
             <button id="dev-exit" class="ghost">退出开发者模式</button>
 
             <p id="dev-status" class="dim" role="status"></p>
@@ -396,6 +415,69 @@
           <button id="btn-reset" class="ghost">重置进度</button>
           <button id="btn-logout" class="ghost">退出登录</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 好友面板（V1.35）：独立界面 —— 好友列表（头像 + 名字，双击开聊天）+ 添加好友 + 申请 + 合作房间 -->
+    <div id="friends" class="overlay hidden">
+      <div class="panel friends-panel">
+        <div class="sub-head">
+          <h3>好友</h3>
+          <button id="friends-close" class="nav-back" type="button">返回</button>
+        </div>
+
+        <div class="me-card">
+          <canvas id="me-avatar" class="avatar-canvas me-avatar" width="132" height="132" aria-label="我的头像"></canvas>
+          <div class="me-info">
+            <strong id="me-name">玩家</strong>
+            <span class="dim" id="me-avatar-label">头像 · 角色外观</span>
+            <button class="tab ghost" data-tab="char" type="button">更换头像</button>
+          </div>
+        </div>
+
+        <!-- 添加好友：V1.35 从主页挪进本界面 -->
+        <div class="friend-add">
+          <input id="friend-input" type="text" placeholder="输入对方用户名" maxlength="24" autocomplete="off" aria-label="好友用户名">
+          <button id="friend-add-btn" class="ghost" type="button">发送申请</button>
+        </div>
+        <p id="friends-status" class="dim friends-status" role="status">加载中…</p>
+
+        <div class="sec-title">好友 <span class="friend-hint">双击头像开始聊天</span></div>
+        <div id="friend-list" class="friend-list"></div>
+
+        <div class="sec-title">收到的申请</div>
+        <div id="friend-incoming" class="friend-list"></div>
+        <div class="sec-title">已发出的申请</div>
+        <div id="friend-outgoing" class="friend-list"></div>
+
+        <div class="sec-title">合作房间</div>
+        <div class="coop-box">
+          <div class="coop-row">
+            <button id="coop-create" class="ghost" type="button">生成房间码</button>
+            <button id="coop-copy" class="ghost" type="button" disabled>复制邀请</button>
+          </div>
+          <div class="coop-row">
+            <input id="coop-input" type="text" placeholder="输入房间码" maxlength="6" autocomplete="off" inputmode="latin" aria-label="房间码">
+            <button id="coop-join" class="ghost" type="button">加入房间</button>
+          </div>
+          <p id="coop-status" class="dim coop-status" role="status"></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 聊天（V1.35）：双击好友打开，与好友 1 对 1 私聊 -->
+    <div id="chat" class="overlay hidden">
+      <div class="panel chat-panel">
+        <div class="sub-head">
+          <h3 id="chat-title">聊天</h3>
+          <button id="chat-close" class="nav-back" type="button">返回好友</button>
+        </div>
+        <div id="chat-log" class="chat-log"></div>
+        <div class="chat-input-row">
+          <input id="chat-input" type="text" placeholder="说点什么…" maxlength="200" autocomplete="off" aria-label="聊天内容">
+          <button id="chat-send" class="ghost" type="button">发送</button>
+        </div>
+        <p id="chat-status" class="dim chat-status" role="status"></p>
       </div>
     </div>
 
@@ -435,17 +517,52 @@
       </div>
     </div>
 
-    <!-- 游戏结束 -->
+    <!-- 游戏结束 / 通关结算 -->
     <div id="gameover" class="overlay hidden">
       <div class="panel">
-        <div class="eyebrow">ADVENTURE COMPLETE</div>
-        <h2>冒险暂告一段落</h2>
+        <div class="eyebrow" id="go-eyebrow">ADVENTURE COMPLETE</div>
+        <h2 id="go-title">冒险暂告一段落</h2>
         <p id="go-stats"></p>
+        <!-- V1.35：阵亡原因 + 本局学到的机制（通关时不显示） -->
+        <p id="go-cause" class="go-cause hidden"></p>
+        <div id="go-learned" class="go-learned hidden"></div>
         <p class="dim">本局获得金币：<span id="go-coins">0</span></p>
         <button id="btn-restart" class="btn-primary">再来一局</button>
         <button id="btn-change" class="ghost">返回主菜单</button>
       </div>
     </div>
+
+    <!-- 宠物蛋孵化 -->
+    <div id="egg-overlay" class="overlay hidden">
+      <div class="panel egg-panel">
+        <div class="eyebrow">HATCH A PET</div>
+        <h2>宠物蛋孵化</h2>
+        <p class="panel-sub">买蛋当场孵化，不用等时间。</p>
+        <div class="egg-stage">
+          <canvas id="egg-canvas" width="280" height="210"></canvas>
+          <div class="egg-readout">
+            <div class="egg-readout-name" id="egg-name">选一颗蛋</div>
+            <div class="egg-readout-desc" id="egg-desc">普通蛋便宜、随机出；指定蛋只出对应宠物。</div>
+          </div>
+        </div>
+        <div class="egg-chips" id="egg-chips"></div>
+        <div class="egg-actions">
+          <button id="egg-hatch" class="btn-primary">孵化 200🪙</button>
+          <button id="egg-close" class="ghost">关闭</button>
+        </div>
+        <p class="dim egg-hint">当前金币 <span id="egg-coins">0</span> · 开蛋有概率直接孵出，否则给能量碎片；攒满 100 可合成</p>
+      </div>
+    </div>
+
+    <!-- 首局引导提示条（V1.35）：只在第一次冒险里出现，做到一步推进一步，可点 ✕ 跳过 -->
+    <div id="guide-tip" class="guide-tip hidden" role="status" aria-live="polite">
+      <span class="guide-prog" id="guide-prog">1/5</span>
+      <span class="guide-text" id="guide-text"></span>
+      <button class="guide-skip" id="guide-skip" type="button" aria-label="跳过引导">✕</button>
+    </div>
+
+    <!-- 轻提示（V1.34）：金币不足 / 条件不满足时从底部浮出，自动消失 -->
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </div>
 
   <script src="js/game.js"></script>

@@ -93,7 +93,7 @@ button:disabled {
   transform: none;
 }
 
-.hidden, .overlay.hidden, .skill-btn.hidden, .ingame-btn.hidden, .login-form input.hidden, .login-actions button.hidden, .dev-toggle.hidden, .dev-hud.hidden, .dev-info-hud.hidden {
+.hidden, .overlay.hidden, .skill-btn.hidden, .ingame-btn.hidden, .login-form input.hidden, .login-actions button.hidden, .dev-toggle.hidden, .dev-hud.hidden, .dev-info-hud.hidden, .guide-tip.hidden {
   display: none;
 }
 
@@ -115,8 +115,9 @@ button:disabled {
   max-height: 100%;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: #73978b66 transparent;
+  /* V1.34：面板不做滚动条显示（内容以不滚动为准，超出时才隐蔽滚动） */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   background: linear-gradient(145deg, #203a3d, #11272c);
   border: 1px solid #91bbae40;
   border-radius: 22px;
@@ -124,6 +125,11 @@ button:disabled {
   color: var(--ink);
   text-align: center;
   box-shadow: 0 24px 60px #0005, inset 0 1px #e3f8dc12;
+}
+
+/* V1.34：所有面板隐藏滚动条（Chromium / WebKit） */
+.panel::-webkit-scrollbar {
+  display: none;
 }
 
 .panel h1 {
@@ -514,6 +520,53 @@ button:disabled {
   border-radius: 5px;
 }
 
+/* 游戏模式选择（V1.32）：标准 / 无尽 两张小卡 */
+.mode-pick {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.mode-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff0e;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mode-chip .mode-name {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.mode-chip .mode-tag {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.mode-chip.on {
+  border-color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+}
+
+.mode-chip.on .mode-tag {
+  color: color-mix(in srgb, var(--gold) 70%, var(--ink));
+}
+
+.mode-chip.locked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .home-best {
   margin: 15px 0 22px;
   font-size: 10px;
@@ -580,6 +633,335 @@ button:disabled {
   padding: 0 4px;
 }
 
+/* ==================== 好友（V1.35：入口移到设置齿轮正下方） ==================== */
+/* 首页右上角竖排两个图标：上 = 设置，下 = 好友。不再占用主页右侧通道，主页排版完全不变。 */
+.head-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.friend-entry {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 12px;
+  background: linear-gradient(#28444170, #152c3170);
+  border: 1px solid var(--line);
+  color: #bcd4b9;
+}
+
+.friend-entry:hover {
+  background: #294b48;
+  border-color: #b1d6b966;
+}
+
+.friend-entry .nav-ico {
+  width: 21px;
+  height: 21px;
+}
+
+.friend-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--gold);
+  color: #22303a;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  box-shadow: 0 2px 6px #0006;
+}
+
+.friend-hint {
+  font-weight: 400;
+  font-size: 10px;
+  color: #7d9a90;
+  margin-left: 6px;
+}
+
+/* 聊天面板（V1.35）：上 = 消息记录，下 = 输入行。日志区自己滚，不外溢面板。 */
+.chat-panel {
+  max-width: 420px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-log {
+  flex: 1;
+  min-height: 220px;
+  max-height: 52vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #081c2477;
+}
+
+.chat-log::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-msg {
+  max-width: 78%;
+  padding: 8px 11px;
+  border-radius: 13px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.chat-msg.them {
+  align-self: flex-start;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid var(--line);
+  border-bottom-left-radius: 5px;
+}
+
+.chat-msg.me {
+  align-self: flex-end;
+  background: #2f5a4c;
+  border: 1px solid #82d8b855;
+  border-bottom-right-radius: 5px;
+}
+
+.chat-time {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: #ffffff8c;
+}
+
+.chat-empty {
+  margin: auto;
+  font-size: 11px;
+  color: #7d9a90;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chat-input-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-input-row button {
+  flex: none;
+  margin-top: 0;
+}
+
+.chat-status {
+  min-height: 16px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+/* 好友面板 */
+.friends-panel {
+  max-width: 420px;
+  text-align: left;
+}
+
+.friends-panel .sub-head {
+  margin-bottom: 14px;
+}
+
+.friends-panel input {
+  width: 100%;
+  min-width: 0;
+  padding: 11px 12px;
+  background: #081c2477;
+  border: 1px solid #799c944d;
+  color: var(--ink);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.friends-panel input::placeholder {
+  color: #91aaa5;
+}
+
+.avatar-canvas {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: #0e2429;
+  flex: none;
+}
+
+.me-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+.me-avatar {
+  width: 66px;
+  height: 66px;
+}
+
+.me-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.me-info strong {
+  max-width: 100%;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.me-info .tab {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.friend-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.friend-add input {
+  flex: 1;
+}
+
+.friend-add button {
+  flex: none;
+}
+
+.friends-status {
+  min-height: 16px;
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+.friend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.friend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  cursor: pointer;
+  user-select: none;
+}
+
+.friend-row .avatar-canvas {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+
+.friend-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.friend-acts {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.friend-acts button {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.friend-acts button.danger {
+  color: #ffaaa0;
+  border-color: #ffaaa055;
+}
+
+.friend-empty {
+  font-size: 11px;
+  color: #7d9a90;
+  padding: 6px 2px;
+}
+
+.coop-box {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+.coop-row {
+  display: flex;
+  gap: 8px;
+}
+
+.coop-row + .coop-row {
+  margin-top: 8px;
+}
+
+.coop-row input {
+  flex: 1;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+}
+
+.coop-row button {
+  flex: none;
+}
+
+.coop-row button:disabled {
+  opacity: .45;
+}
+
+.coop-status {
+  min-height: 16px;
+  margin: 10px 0 0;
+  font-size: 11px;
+}
+
+.coop-code {
+  color: var(--gold);
+  font-size: 15px;
+  letter-spacing: 4px;
+  font-weight: 700;
+}
+
 .sub-head {
   display: flex;
   align-items: center;
@@ -622,6 +1004,14 @@ button:disabled {
   min-width: 0;
 }
 
+/* 装备行的按钮组（V1.29：装备 / 重铸 并排） */
+.item-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .item-name {
   color: #e7eddf;
   font-size: 14px;
@@ -654,6 +1044,346 @@ button:disabled {
   background: #f2cc8318;
   color: var(--gold);
   border-color: #f2cc8333;
+}
+
+/* 装备词条行（V1.30：档位角标 + 锁定按钮） */
+.gear-affixes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.gear-affix {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #a8c0b4;
+  line-height: 1.5;
+}
+
+.gear-affix.on {
+  color: var(--gold);
+}
+
+.gear-affix-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.gear-affix-tier {
+  color: var(--mint);
+  font-weight: 700;
+}
+
+.item-btn.gear-lock {
+  padding: 3px 8px;
+}
+
+.item-btn.on {
+  background: #f2cc8320;
+  color: var(--gold);
+  border-color: #f2cc8366;
+}
+
+/* ===== 装备页（V1.35）：中间实时角色 + 两侧栏位 → 候选列表 → 铁砧洗练 ===== */
+.gear-stage-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  margin: 2px 0 6px;
+}
+
+.gear-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.gear-stage-mid {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+#gear-stage,
+#pet-stage {
+  width: 100%;
+  height: clamp(118px, 19vh, 168px);
+}
+
+#gear-anvil-stage {
+  width: 100%;
+  height: clamp(118px, 18vh, 162px);
+}
+
+#pet-anvil-stage {
+  width: 100%;
+  height: clamp(94px, 15vh, 138px);
+}
+
+.gear-stage-cap {
+  max-width: 100%;
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 单个装备栏位：图标 + 槽位名 + 已装备的名字 + 词条进度 */
+.gear-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  padding: 9px 6px;
+  min-height: 76px;
+  background: #11262ad9;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: #e7eddf;
+  transition: border-color .15s, background .15s, transform .15s;
+}
+
+.gear-slot:hover {
+  background: #14303399;
+  border-color: #82d8b866;
+}
+
+.gear-slot:active {
+  transform: none;
+}
+
+.gear-slot.empty {
+  border-style: dashed;
+}
+
+.gear-slot-ico {
+  display: flex;
+  width: 20px;
+  height: 20px;
+  color: var(--mint);
+}
+
+.gear-slot-ico svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linejoin: round;
+}
+
+.gear-slot.empty .gear-slot-ico {
+  color: #4f6a63;
+}
+
+.gear-slot-kind {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.gear-slot-item {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+  word-break: break-all;
+}
+
+.gear-slot.empty .gear-slot-item {
+  font-weight: 400;
+  color: #6c7f78;
+}
+
+.gear-slot-affix {
+  font-size: 9px;
+  color: var(--gold);
+}
+
+.gear-tip {
+  margin-top: 8px;
+  font-size: 10px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.gear-list-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+.gear-list-head strong {
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: var(--gold);
+}
+
+.gear-list-head .dim {
+  font-size: 10px;
+}
+
+/* 铁砧页：上方装备特写（画布）+ 下方洗练面板 */
+.gear-anvil-wrap {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(#0d2125, #0a191c);
+  overflow: hidden;
+}
+
+.gear-anvil {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #11262ab0;
+}
+
+.anvil-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.anvil-ico-wrap {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #f2cc8344;
+  border-radius: 9px;
+  background: #f2cc8318;
+  color: var(--gold);
+}
+
+.anvil-ico-wrap svg {
+  width: 19px;
+  height: 19px;
+  fill: currentColor;
+}
+
+.item-btn.gear-refine {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--gold);
+  background: #f2cc8312;
+  border-color: #f2cc8355;
+}
+
+.item-btn.gear-anvil-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.item-btn.gear-anvil-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+/* 宠物台中间下方的主按钮（出战 / 养成） */
+.pet-stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* ===== 宠物栏（V1.31）：四张宠物卡，带小头像 / 等级 / 进化阶段 ===== */
+.pet-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.pet-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 8px 4px 7px;
+  background: #11262ad9;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  transition: border-color .15s, background .15s;
+}
+
+.pet-slot:hover {
+  border-color: #82d8b866;
+}
+
+.pet-slot.cur {
+  background: #82d8b814;
+  border-color: #82d8b8aa;
+}
+
+.pet-slot.locked {
+  opacity: .6;
+}
+
+.pet-slot-face {
+  display: block;
+  width: 46px;
+  height: 46px;
+}
+
+.pet-slot-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: #e7eddf;
+  white-space: nowrap;
+}
+
+.pet-slot.cur .pet-slot-name {
+  color: var(--mint);
+}
+
+.pet-slot-sub {
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pet-slot-stage {
+  font-size: 9px;
+  color: var(--gold);
+}
+
+.pet-slot-on {
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 6px;
+  background: #82d8b8;
+  color: #08191c;
 }
 
 .opt-group, .lo-group {
@@ -694,6 +1424,27 @@ button:disabled {
   border-radius: 4px;
 }
 
+/* 头像选择：左边一张大预览，右边一排 chip */
+.avatar-pick {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.avatar-slot {
+  flex: none;
+}
+
+.avatar-slot .avatar-canvas {
+  width: 72px;
+  height: 72px;
+}
+
+.avatar-pick .chip-row {
+  flex: 1;
+  min-width: 0;
+}
+
 .char-edit {
   display: flex;
   flex-direction: column;
@@ -704,13 +1455,6 @@ button:disabled {
   width: 260px;
   max-width: 100%;
   margin: auto;
-  object-fit: contain;
-}
-
-#pet-preview {
-  width: 240px;
-  height: 180px;
-  max-width: 100%;
   object-fit: contain;
 }
 
@@ -949,6 +1693,49 @@ input[type='checkbox'] {
   line-height: 1.9;
 }
 
+/* 阵亡原因（V1.35）：一句话说清「是什么打死的」，别让新玩家只看到「你死了」 */
+.go-cause {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid #e98d7c55;
+  border-left: 3px solid #e98d7c;
+  border-radius: 10px;
+  background: #e98d7c14;
+  color: #f0c4bb;
+  font-size: 12px;
+  line-height: 1.7;
+  text-align: left;
+}
+
+/* 本局学到的机制（V1.35）：首局结束时只给「你已经用上的东西」，不一次性铺开所有系统入口 */
+.go-learned {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #11262ab0;
+  text-align: left;
+}
+
+.go-learned-title {
+  margin-bottom: 6px;
+  color: var(--mint);
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.go-learned-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #c8dbcd;
+  font-size: 12px;
+  line-height: 1.85;
+}
+
+.go-learned-list li::marker {
+  color: var(--gold);
+}
+
 #gameover .btn-primary {
   margin-top: 24px;
 }
@@ -973,6 +1760,8 @@ input[type='checkbox'] {
   background: #a3d1b91a;
   border: 1px solid #a3d1b933;
   z-index: 5;
+  /* V1.35 移动端验收：double-tap 缩放会吞掉一次点击，这里明确交给我们自己处理 */
+  touch-action: manipulation;
 }
 
 .ingame-btn:active {
@@ -990,6 +1779,23 @@ input[type='checkbox'] {
   stroke: #e4eadb;
   stroke-width: 2;
   stroke-linecap: round;
+}
+
+/* 自动攻击目标优先级（V1.31）：贴在右上角，文字按钮 */
+.ingame-btn.aim-btn {
+  left: auto;
+  right: 14px;
+  transform: none;
+  width: auto;
+  min-width: 52px;
+  padding: 0 9px;
+  font-size: 11px;
+  color: #cfe3d8;
+  white-space: nowrap;
+}
+
+.ingame-btn.aim-btn:active {
+  transform: translateY(1px);
 }
 
 .skill-bar {
@@ -1438,7 +2244,8 @@ input[type='checkbox'] {
 .dev-toggle {
   position: absolute;
   right: 10px;
-  top: 40px;
+  /* V1.34：右上角 top:40px 已被「切换攻击目标」按钮占用，下移避免重叠 */
+  top: 74px;
   z-index: 21;
   width: 34px;
   height: 28px;
@@ -1695,6 +2502,17 @@ input[type='checkbox'] {
   background: #ffffff1f;
 }
 
+/* V1.31：卡牌改为「点一下选中、再点一下取消」，选中态高亮 */
+.dev-card.picked {
+  border-color: var(--gold);
+  background: #ffd75e26;
+  box-shadow: inset 0 0 0 1px #ffd75e55;
+}
+
+.dev-note-tight {
+  margin: 2px 0 4px;
+}
+
 .dev-card .dev-card-name {
   font-weight: 700;
   white-space: nowrap;
@@ -1765,6 +2583,12 @@ input[type='checkbox'] {
   width: min(360px, 46%);
 }
 
+/* V1.35：横屏面板展开后右上角被占用，「切换攻击目标」按钮让到左上，两者不再叠在一起 */
+#stage.landscape.dev-open .ingame-btn.aim-btn {
+  left: 14px;
+  right: auto;
+}
+
 #stage.landscape .dev-info-hud.pushed {
   right: auto;
   left: 8px;
@@ -1783,3 +2607,272 @@ input[type='checkbox'] {
     transition: none !important;
   }
 }
+
+/* ==================== 宠物蛋孵化浮层（V1.27） ====================
+   面板比常规 .panel 稍宽，内容纵向可滚动：保证 390×844 竖屏下「蛋舞台 + 蛋列表 + 按钮」
+   都落在屏内或能滚到。蛋的晃动 / 裂纹 / 爆开全由 JS 在 #egg-canvas 上绘制，
+   这里只有面板入场淡入与 chip 的状态过渡；两者在 prefers-reduced-motion 下已被上面的全局规则关掉。 */
+.egg-panel {
+  max-width: 420px;
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 22px 20px 18px;
+  animation: pageIn .25s ease both;
+}
+
+/* 蛋舞台：画布居中、等比自适应，下面跟两行读数 */
+.egg-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 10px 12px;
+  margin-bottom: 14px;
+  background: radial-gradient(ellipse at 50% 72%, color-mix(in srgb, var(--mint) 10%, transparent), transparent 65%);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+/* 覆盖全局 canvas{width:100%;height:100%}：蛋画布保持自身 280×210 比例并居中 */
+.egg-stage canvas {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.egg-readout {
+  text-align: center;
+  line-height: 1.5;
+}
+
+.egg-readout-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* 孵出新宠物：金色高亮 */
+.egg-readout-name.new {
+  color: var(--gold);
+}
+
+/* 重复孵化转碎片：次要色（同 .dim 的 var(--muted)） */
+.egg-readout-name.dup {
+  color: var(--muted);
+}
+
+.egg-readout-desc {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* 蛋列表：名称 + 价格两行的小按钮，横向换行排布 */
+.egg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin: 12px 0 16px;
+}
+
+.egg-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 7px 12px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.3;
+  cursor: pointer;
+  transition: background .18s, border-color .18s, color .18s;
+}
+
+.egg-chip:hover {
+  background: color-mix(in srgb, var(--mint) 14%, var(--surface));
+  border-color: var(--gold);
+}
+
+/* 已解锁该宠物的指定蛋：薄荷色细边框（放在 .active 前，选中态的金色描边仍优先） */
+.egg-chip.owned {
+  border-color: color-mix(in srgb, var(--mint) 55%, var(--line));
+}
+
+.egg-chip.active {
+  color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 12%, var(--surface));
+  border-color: var(--gold);
+}
+
+.egg-chip.locked {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.egg-chip-name {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.egg-chip-cost {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.egg-chip.active .egg-chip-cost {
+  color: var(--gold);
+}
+
+/* 底部操作：主按钮占更多宽度 */
+.egg-actions {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.egg-actions .btn-primary {
+  flex: 2;
+  padding: 14px 10px;
+  font-size: 16px;
+  letter-spacing: 2px;
+}
+
+.egg-actions .ghost {
+  flex: 1;
+  margin: 0;
+}
+
+/* V1.34：金币不够时孵化按钮不禁用（点了给「金币不足」提示），只把外观调暗 */
+#egg-hatch.locked {
+  background: #f2cc8324;
+  color: var(--gold);
+  box-shadow: none;
+}
+
+.egg-hint {
+  margin-top: 14px;
+}
+
+#egg-coins {
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 横屏：放宽面板并限高，交给面板内部滚动，避免蛋舞台与按钮被裁掉 */
+#stage.landscape .egg-panel {
+  max-width: min(640px, 100%);
+  padding: 18px 24px;
+}
+
+#stage.landscape .egg-stage canvas {
+  max-height: 38vh;
+}
+
+/* ==================== 轻提示（V1.34） ====================
+   金币不足 / 条件不满足时从底部浮出。放在 #stage 内、z-index 高于所有 overlay，
+   所以开蛋浮层、装备页里点按钮也能看到；不加 pointer-events，绝不挡点击。 */
+.toast {
+  position: absolute;
+  left: 50%;
+  bottom: 13%;
+  z-index: 60;
+  max-width: 82%;
+  padding: 9px 16px;
+  border: 1px solid color-mix(in srgb, var(--gold) 55%, var(--line));
+  border-radius: 999px;
+  background: #10252ad9;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  transform: translate(-50%, 12px);
+  pointer-events: none;
+  transition: opacity .2s ease, transform .2s ease;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* 提示里的数字（金币）用金色，和面板里保持一致 */
+.toast .t-gold {
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 首局引导提示条（V1.35） =====
+   只在第一次冒险里出现，贴在屏幕下三分之一处的正中央（摇杆在左下、技能键在右下，中间是空的）。
+   只有 ✕ 可点，其余区域 pointer-events: none，绝不吞掉移动用的拖动操作。 */
+.guide-tip {
+  position: absolute;
+  left: 50%;
+  bottom: 23%;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 86%;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--mint) 45%, var(--line));
+  border-radius: 999px;
+  background: #0c2126e0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.45;
+  transform: translateX(-50%);
+  pointer-events: none;
+  animation: guide-in .22s ease;
+}
+
+@keyframes guide-in {
+  from { opacity: 0; transform: translate(-50%, 10px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.guide-prog {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--mint) 22%, transparent);
+  color: var(--mint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.guide-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.guide-skip {
+  flex: none;
+  margin: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #ffffff12;
+  color: #a8c0b4;
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: auto;      /* 只有这个 ✕ 可点 */
+}
+
+.guide-skip:hover { background: #ffffff22; }
+

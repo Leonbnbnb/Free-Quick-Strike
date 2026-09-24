@@ -2,12 +2,15 @@
 //
 // 契约与本地开发用的 server.js 完全一致，前端 js/game.js 不需要感知差异：
 //   GET    /api/users                                     -> { ok: true }，探活（判断该走在线接口还是本地存储）
-//   GET    /api/users?username=<name>                    -> { user: { username, meta } }（需令牌）
+//   GET    /api/users?username=<name>                    -> { user: { username, meta, avatar } }（需令牌）
 //   POST   /api/users  { action:'login', username, password } -> 校验密码，返回 { ok, user, token }
 //   POST   /api/users  { user, createOnly:true }          -> 注册（无需令牌，主键判重），返回 { ok, token }
 //   POST   /api/users  { user }                          -> 改密（需令牌，只动密码列），返回 { ok, token }
-//   PATCH  /api/users  { username, meta }                 -> 只更新存档（需令牌，不能用别人的名字）
+//   PATCH  /api/users  { username, meta, avatar }         -> 更新存档 + 公开头像（需令牌，不能用别人的名字）
 //   DELETE /api/users?username=<name>                     -> 删除账号（需令牌，只能删自己）
+//
+// `avatar` 是**公开头像的副本**（好友列表要读别人的头像，而 meta 是隐私）：
+// 前端保存存档时顺带把 meta.avatar 写进 users.avatar 这一列，好友接口只读这一列。
 //
 // 除注册与探活外都要求 `Authorization: Bearer <token>`（见 api/_auth.js）。
 // 令牌是无状态的签名串，含密码版本，改密后旧令牌立即失效。
@@ -72,7 +75,7 @@ const eq = v => encodeURIComponent(v);
 // 取账号行（含密码列）：登录校验与令牌校验都要用到
 async function getAuthRow(username) {
   const r = await sbFetch(
-    `${TABLE}?select=username,password,password_hash,meta&username=eq.${eq(username)}&limit=1`,
+    `${TABLE}?select=username,password,password_hash,meta,avatar&username=eq.${eq(username)}&limit=1`,
     { headers: headers() },
   );
   return (await r.json())[0] || null;
@@ -82,7 +85,7 @@ async function getAuthRow(username) {
 // 由数据库主键做原子判重，两个并发注册不会互相覆盖。
 async function createUser(user) {
   const hash = hashPassword(user.password);
-  const row = { username: user.username, password: '', password_hash: hash, meta: user.meta || {} };
+  const row = { username: user.username, password: '', password_hash: hash, meta: user.meta || {}, avatar: user.avatar || null };
   const r = await sbFetch(`${TABLE}?on_conflict=username`, {
     method: 'POST',
     headers: headers({ Prefer: 'resolution=ignore-duplicates,return=representation' }),
@@ -102,11 +105,14 @@ async function changePassword(username, password) {
   return hash;
 }
 
-async function updateMeta(username, meta) {
+// 存档 + 公开头像一起写。avatar 不传时保持原值（老客户端不带 avatar 也不会把头衔清掉）
+async function updateMeta(username, meta, avatar) {
+  const patch = { meta: meta || {} };
+  if (avatar !== undefined) patch.avatar = avatar || null;
   await sbFetch(`${TABLE}?username=eq.${eq(username)}`, {
     method: 'PATCH',
     headers: headers({ Prefer: 'return=minimal' }),
-    body: JSON.stringify({ meta: meta || {} }),
+    body: JSON.stringify(patch),
   });
 }
 
@@ -129,6 +135,14 @@ async function deleteUser(username) {
 // 删号时一并清掉榜单记录，避免留下挂在排行榜上的孤儿行
 async function deleteScore(username) {
   await sbFetch(`scores?username=eq.${eq(username)}`, {
+    method: 'DELETE',
+    headers: headers({ Prefer: 'return=minimal' }),
+  });
+}
+
+// 删号时把两个方向的好友关系都删掉（friendships 是有向的一行一条）
+async function deleteFriendships(username) {
+  await sbFetch(`friendships?or=(requester.eq.${eq(username)},addressee.eq.${eq(username)})`, {
     method: 'DELETE',
     headers: headers({ Prefer: 'return=minimal' }),
   });
@@ -165,7 +179,7 @@ module.exports = async function handler(req, res) {
       if (!username) { send(res, 200, { ok: true, api: 'users' }); return; }
       const row = await requireAuth(req, res, username);
       if (!row) return;
-      send(res, 200, { user: { username: row.username, meta: row.meta || {} } });
+      send(res, 200, { user: { username: row.username, meta: row.meta || {}, avatar: row.avatar || null } });
       return;
     }
 
@@ -199,7 +213,7 @@ module.exports = async function handler(req, res) {
 
       if (body.createOnly) {
         // 注册：不需要令牌，靠主键判重保证不会覆盖已有账号
-        const hash = await createUser({ username: name, password, meta: u.meta });
+        const hash = await createUser({ username: name, password, meta: u.meta, avatar: u.avatar });
         if (!hash) { send(res, 409, { ok: false, error: '用户名已存在' }); return; }
         send(res, 200, { ok: true, token: issueToken({ username: name, password_hash: hash }) });
         return;
@@ -219,7 +233,7 @@ module.exports = async function handler(req, res) {
       if (!name) throw new Error('缺少 username');
       const row = await requireAuth(req, res, name);
       if (!row) return;
-      await updateMeta(name, body.meta);
+      await updateMeta(name, body.meta, body.avatar);
       send(res, 200, { ok: true });
       return;
     }
@@ -229,7 +243,8 @@ module.exports = async function handler(req, res) {
       const row = await requireAuth(req, res, username);
       if (!row) return;
       await deleteUser(username);
-      await deleteScore(username);   // 顺带清掉榜单记录，避免删号后还挂在排行榜上
+      await deleteScore(username);      // 顺带清掉榜单记录，避免删号后还挂在排行榜上
+      await deleteFriendships(username);   // 以及好友关系，避免留下指向已删账号的孤儿行
       send(res, 200, { ok: true });
       return;
     }

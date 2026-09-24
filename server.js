@@ -77,12 +77,15 @@ function readBody(req) {
 }
 
 // 用户数据接口：按账号粒度读写（契约与线上 api/users.js 完全一致）
-//   GET    /api/users?username=<name>                    单个账号（需令牌）；只返回 username / meta
+//   GET    /api/users?username=<name>                    单个账号（需令牌）；只返回 username / meta / avatar
 //   POST   /api/users  { action:'login', username, password }  校验密码，返回令牌
 //   POST   /api/users  { user, createOnly:true }         注册（无需令牌），返回令牌
 //   POST   /api/users  { user }                          改密（需令牌，只动密码列）
-//   PATCH  /api/users  { username, meta }                只更新存档（需令牌）
+//   PATCH  /api/users  { username, meta, avatar }        更新存档 + 公开头像（需令牌）
 //   DELETE /api/users?username=<name>                    删除账号（需令牌，只能删自己）
+//
+// `avatar` 是**公开头像的副本**：好友列表要读别人的头像，而 meta 是整个存档（隐私），
+// 所以前端在保存存档时把 meta.avatar 的副本一并写进这一列，好友接口只读这一列。
 //
 // 除注册与探活外都要求 Authorization: Bearer <token>；令牌含密码版本，改密后旧令牌失效。
 // 密码只存 PBKDF2 哈希，任何接口都不返回密码或哈希；老账号登录成功时原地升级。
@@ -107,7 +110,7 @@ async function handleUsersApi(req, res) {
     if (!username) { sendJson(res, 200, { ok: true, api: 'users' }); return; }
     const row = requireAuth(username);
     if (!row) return;
-    sendJson(res, 200, { user: { username: row.username, meta: row.meta || {} } });
+    sendJson(res, 200, { user: { username: row.username, meta: row.meta || {}, avatar: row.avatar || null } });
     return;
   }
 
@@ -148,7 +151,7 @@ async function handleUsersApi(req, res) {
       // 注册：不需要令牌，靠账号名判重保证不会覆盖已有账号
       const i = list.findIndex(x => x.username === name);
       if (i >= 0) { sendJson(res, 409, { ok: false, error: '用户名已存在' }); return; }
-      const row = { username: name, password: '', password_hash: hashPassword(password), meta: u.meta || {} };
+      const row = { username: name, password: '', password_hash: hashPassword(password), meta: u.meta || {}, avatar: (u && u.avatar) || null };
       list.push(row);
       writeUsers(list);
       sendJson(res, 200, { ok: true, token: issueToken(row) });
@@ -172,6 +175,7 @@ async function handleUsersApi(req, res) {
     const row = requireAuth(name);
     if (!row) return;
     row.meta = body.meta || {};
+    if (body.avatar !== undefined) row.avatar = body.avatar || null;   // 不传就保持原值
     writeUsers(list);
     sendJson(res, 200, { ok: true });
     return;
@@ -184,6 +188,8 @@ async function handleUsersApi(req, res) {
     writeUsers(list.filter(x => x.username !== username));
     // 顺带清掉榜单记录，避免删号后还挂在排行榜上
     writeScores(readScores().filter(x => x.username !== username));
+    // 以及好友关系（两个方向），避免留下指向已删账号的孤儿行
+    writeFriends(readFriends().filter(x => x.requester !== username && x.addressee !== username));
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -260,10 +266,178 @@ async function handleLeaderboardApi(req, res) {
   res.writeHead(405).end();
 }
 
+// 好友接口（契约与线上 api/friends.js 一致）
+//   GET  /api/friends                                好友 / 收到的申请 / 我发出的申请（需令牌）
+//   POST /api/friends { action, username }           request / accept / decline / remove（需令牌）
+// 身份一律取自令牌，不接受客户端传自己的用户名。
+// 关系存在 data/friends.json，一行一条**有向**关系：requester -> addressee，status = pending | accepted。
+// 「互为好友」= 存在 accepted 的一行（方向不敏感）；双方互相申请 → 第二次直接变 accepted。
+const FRIENDS_FILE = path.join(DATA_DIR, 'friendships.json');
+
+function readFriends() {
+  try {
+    const list = JSON.parse(fs.readFileSync(FRIENDS_FILE, 'utf8'));
+    return Array.isArray(list) ? list : [];
+  } catch (e) { return []; }
+}
+
+function writeFriends(list) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(FRIENDS_FILE, JSON.stringify(list, null, 2), 'utf8');
+}
+
+async function handleFriendsApi(req, res) {
+  const list = readUsers();
+
+  const auth = () => {
+    const data = verifyToken(bearer(req));
+    if (!data) { sendJson(res, 401, { ok: false, error: '登录已失效，请重新登录' }); return null; }
+    const row = list.find(x => x.username === data.u);
+    if (!row) { sendJson(res, 401, { ok: false, error: '账号不存在' }); return null; }
+    if (passwordVersion(row) !== data.pv) { sendJson(res, 401, { ok: false, error: '登录已失效，请重新登录' }); return null; }
+    return row;
+  };
+
+  const payload = me => {
+    const rows = readFriends().filter(r => r.requester === me || r.addressee === me);
+    const friends = [], incoming = [], outgoing = [];
+    for (const row of rows) {
+      const other = row.requester === me ? row.addressee : row.requester;
+      if (row.status === 'accepted') friends.push({ username: other, at: row.updated_at || row.created_at });
+      else if (row.addressee === me) incoming.push({ username: other, at: row.created_at });
+      else outgoing.push({ username: other, at: row.created_at });
+    }
+    const avatarOf = name => {
+      const u = list.find(x => x.username === name);
+      return (u && u.avatar) || null;
+    };
+    const fill = arr => arr
+      .map(x => ({ username: x.username, avatar: avatarOf(x.username), at: x.at }))
+      .sort((a, b) => String(a.username).localeCompare(String(b.username)));
+    return { ok: true, friends: fill(friends), incoming: fill(incoming), outgoing: fill(outgoing) };
+  };
+
+  const me = auth();
+  if (!me) return;
+
+  if (req.method === 'GET') { sendJson(res, 200, payload(me.username)); return; }
+
+  if (req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body) { sendJson(res, 400, { ok: false, error: '请求体不是合法 JSON' }); return; }
+    const action = String(body.action || '');
+    const target = String(body.username || '').trim();
+    if (!target) { sendJson(res, 400, { ok: false, error: '缺少 username' }); return; }
+    if (target === me.username) { sendJson(res, 400, { ok: false, error: '不能加自己为好友' }); return; }
+    if (!list.some(x => x.username === target)) { sendJson(res, 404, { ok: false, error: '这个账号不存在' }); return; }
+
+    const all = readFriends();
+    const find = (from, to) => all.find(r => r.requester === from && r.addressee === to);
+    const now = new Date().toISOString();
+    const keep = all.filter(r => !(r.requester === me.username && r.addressee === target)
+      && !(r.requester === target && r.addressee === me.username));
+
+    if (action === 'request') {
+      const mine = find(me.username, target);
+      const theirs = find(target, me.username);
+      if (mine && mine.status === 'accepted') { sendJson(res, 200, payload(me.username)); return; }
+      if (theirs && theirs.status === 'pending') {
+        keep.push({ requester: target, addressee: me.username, status: 'accepted', created_at: theirs.created_at, updated_at: now });
+      } else if (!mine) {
+        keep.push({ requester: me.username, addressee: target, status: 'pending', created_at: now, updated_at: now });
+      } else {
+        keep.push(mine);
+      }
+    } else if (action === 'accept') {
+      const theirs = find(target, me.username);
+      keep.push({ requester: target, addressee: me.username, status: 'accepted', created_at: (theirs && theirs.created_at) || now, updated_at: now });
+    } else if (action === 'decline' || action === 'remove') {
+      // decline = 删掉 pending（拒绝对方 / 撤回自己）；remove = 删好友。两者在这里都是「两向都不留」
+    } else {
+      sendJson(res, 400, { ok: false, error: '未知的 action' });
+      return;
+    }
+
+    writeFriends(keep);
+    sendJson(res, 200, payload(me.username));
+    return;
+  }
+
+  res.writeHead(405).end();
+}
+
+// 聊天接口（契约与线上 api/chat.js 一致）
+//   GET  /api/chat?with=<name>   取我和某位好友的往来消息（需令牌）
+//   POST /api/chat { to, text }  发一条消息（需令牌）
+// 身份一律取自令牌；只有**互为好友**的两人之间才能收发。
+// 消息落盘 data/messages.json，一行一条 { from, to, text, t }；总量封顶，超出丢最旧的。
+const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
+const CHAT_MAX_TEXT = 200;
+const CHAT_MAX_ROWS = 5000;
+
+function readMessages() {
+  try {
+    const list = JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf8'));
+    return Array.isArray(list) ? list : [];
+  } catch (e) { return []; }
+}
+
+function writeMessages(list) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(MESSAGES_FILE, JSON.stringify(list, null, 2), 'utf8');
+}
+
+function areFriends(a, b) {
+  return readFriends().some(r => r.status === 'accepted'
+    && ((r.requester === a && r.addressee === b) || (r.requester === b && r.addressee === a)));
+}
+
+async function handleChatApi(req, res) {
+  const list = readUsers();
+  const data = verifyToken(bearer(req));
+  if (!data) { sendJson(res, 401, { ok: false, error: '登录已失效，请重新登录' }); return; }
+  const row = list.find(x => x.username === data.u);
+  if (!row) { sendJson(res, 401, { ok: false, error: '账号不存在' }); return; }
+  if (passwordVersion(row) !== data.pv) { sendJson(res, 401, { ok: false, error: '登录已失效，请重新登录' }); return; }
+  const me = row.username;
+
+  if (req.method === 'GET') {
+    const peer = (new URL(req.url, 'http://localhost').searchParams.get('with') || '').trim();
+    if (!peer) { sendJson(res, 400, { ok: false, error: '缺少 with' }); return; }
+    if (!areFriends(me, peer)) { sendJson(res, 403, { ok: false, error: '你们还不是好友' }); return; }
+    const messages = readMessages()
+      .filter(m => (m.from === me && m.to === peer) || (m.from === peer && m.to === me))
+      .sort((a, b) => a.t - b.t);
+    sendJson(res, 200, { ok: true, messages });
+    return;
+  }
+
+  if (req.method === 'POST') {
+    const body = await readBody(req);
+    if (!body) { sendJson(res, 400, { ok: false, error: '请求体不是合法 JSON' }); return; }
+    const to = String(body.to || '').trim();
+    const text = String(body.text || '').trim().slice(0, CHAT_MAX_TEXT);
+    if (!to) { sendJson(res, 400, { ok: false, error: '缺少 to' }); return; }
+    if (!text) { sendJson(res, 400, { ok: false, error: '消息不能为空' }); return; }
+    if (!list.some(x => x.username === to)) { sendJson(res, 404, { ok: false, error: '这个账号不存在' }); return; }
+    if (!areFriends(me, to)) { sendJson(res, 403, { ok: false, error: '你们还不是好友' }); return; }
+    const message = { from: me, to, text, t: Date.now() };
+    const all = readMessages();
+    all.push(message);
+    writeMessages(all.slice(-CHAT_MAX_ROWS));   // 只留最近的一批，避免无限增长
+    sendJson(res, 200, { ok: true, message });
+    return;
+  }
+
+  res.writeHead(405).end();
+}
+
 http.createServer((req, res) => {
   let urlPath = decodeURIComponent(req.url.split('?')[0]);
   if (urlPath === '/api/users') { handleUsersApi(req, res); return; }
   if (urlPath === '/api/leaderboard') { handleLeaderboardApi(req, res); return; }
+  if (urlPath === '/api/friends') { handleFriendsApi(req, res); return; }
+  if (urlPath === '/api/chat') { handleChatApi(req, res); return; }
   if (urlPath === '/') urlPath = '/index.html';
   if (urlPath.startsWith('/data/')) {                    // 存档目录不对外暴露
     res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -279,7 +453,9 @@ http.createServer((req, res) => {
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    // 本地开发服务器：静态资源一律 no-store。否则浏览器会启发式缓存 js/game.js 与 tests/visual-smoke.js，
+    // 改完代码刷新页面仍跑旧脚本（回归台会读到过期的断言文案与数值）。
+    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-store' });
     res.end(data);
   });
 }).listen(PORT, () => {
