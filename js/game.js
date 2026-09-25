@@ -2027,6 +2027,14 @@ let blasts = [];     // 火球爆炸特效
 let swordSlashes = [];  // 飞剑贯穿斩痕
 let hitStop = 0;     // 顿帧剩余时间（贯穿命中时短暂冻结逻辑，渲染照常）
 let lastHitStopT = -1;
+// 唯一的顿帧入口：逻辑侧冻结由 hitStop 走 loop()，客机侧靠 netHitStopPulse 随 fx 下发。
+//   **下发的是「脉冲」而不是剩余时长** —— 顿帧只有 0.02s，而快照节拍是 55ms，
+//   等下一拍去读 hitStop 时多半已经衰减到 0 了（实测只能撞上约 1/3 的概率）；
+//   记「这一拍触发过、时长多少」，客机整段照收，才能稳定打出手感。
+function triggerHitStop(d) {
+  hitStop = Math.max(hitStop, d);
+  if (netRole === 'host') netHitStopPulse = Math.max(netHitStopPulse, d);
+}
 let obstacles = [];  // 木桶 / 箱子 / 石柱 / 树木
 let vines = [];      // 藤蔓陷阱
 let squadRootedT = 0; // 被藤蔓缠住的剩余时间
@@ -5075,7 +5083,7 @@ function updateSword(s, dt) {
     b.cool = hitCd;
     sfxHit();
     shake = Math.min(10, shake + 1.2);
-    if (gameTime - lastHitStopT > 0.25) { lastHitStopT = gameTime; hitStop = Math.max(hitStop, def.hitStop); }
+    if (gameTime - lastHitStopT > 0.25) { lastHitStopT = gameTime; triggerHitStop(def.hitStop); }
     if (chain > 0) {                               // 连斩：波及命中点附近的敌人
       let n = 0;
       for (const o of enemies) {
@@ -7832,17 +7840,37 @@ function sfxReady(key, gap) {
   return true;
 }
 
+// 房主：把「这一刻发生的打击事件」记下来，随快照节拍下发给客机（客机不跑逻辑，音效无从产生）。
+//   **在「事件层」记，不在「播放层」记**（放在 audioReady / sfxReady 之前）：
+//   客机听不听得到该由**客机自己的音效设置**决定，不该被房主关没关声音带着走；
+//   而节流那一套客机自己也会做一遍（它调的就是下面这些函数），所以不会变成噪音墙。
+//   一拍之内同类只留一条 —— 音效本来就有 40~120ms 的节流，快照间隔是 55ms，一条正好。
+function netSfxTap(key) {
+  if (netRole !== 'host') return;
+  if (netSfxQueue.indexOf(key) >= 0 || netSfxQueue.length >= NET_SFX_MAX) return;
+  netSfxQueue.push(key);
+}
+
+// 音效 key → 播放函数（客机照着重放房主播过的音效）
+const SFX_BY_KEY = {
+  shoot: sfxShoot, hit: sfxHit, kill: sfxKill, explode: sfxExplode,
+  fireball: sfxFireball, thunder: sfxThunder, ice: sfxIce, hurt: sfxHurt,
+};
+
 function sfxShoot() {
+  netSfxTap('shoot');
   if (!audioReady()) return;
   beep(540, 0.04, 'square', 0.015);
   noiseHit(0.06, 0.012, 'highpass', 1400, 700);
 }
 function sfxHit() {
+  netSfxTap('hit');
   if (!audioReady() || !sfxReady('hit', 40)) return;
   noiseHit(0.07, 0.03, 'bandpass', 1100, 320, 1.1);
   beep(190, 0.05, 'sawtooth', 0.02);
 }
 function sfxKill() {
+  netSfxTap('kill');
   if (!audioReady() || !sfxReady('kill', 60)) return;
   sweep(320, 70, 0.22, 'square', 0.045);
   noiseHit(0.2, 0.028, 'lowpass', 900, 220);
@@ -7860,18 +7888,21 @@ function sfxLevelup() {
 }
 // 爆炸：低频冲击 + 轰鸣噪声
 function sfxExplode() {
+  netSfxTap('explode');
   if (!audioReady() || !sfxReady('boom', 70)) return;
   sweep(170, 42, 0.34, 'sine', 0.085);
   noiseHit(0.38, 0.065, 'lowpass', 1500, 130);
 }
 // 火球：呼啸的火焰声（带通由低扫到高，像火球破空）
 function sfxFireball() {
+  netSfxTap('fireball');
   if (!audioReady() || !sfxReady('fire', 80)) return;
   noiseHit(0.32, 0.05, 'bandpass', 260, 1100, 0.9);
   sweep(190, 65, 0.3, 'sawtooth', 0.028);
 }
 // 雷击：先脆裂的电弧，再跟一声滚动的低频雷声
 function sfxThunder() {
+  netSfxTap('thunder');
   if (!audioReady() || !sfxReady('thunder', 90)) return;
   noiseHit(0.07, 0.1, 'highpass', 2600, 1200);
   sweep(920, 90, 0.26, 'square', 0.045);
@@ -7879,12 +7910,14 @@ function sfxThunder() {
 }
 // 冰刺：清脆的晶体破空与碎裂
 function sfxIce() {
+  netSfxTap('ice');
   if (!audioReady() || !sfxReady('ice', 70)) return;
   beep(2280, 0.05, 'triangle', 0.03);
   sweep(1800, 780, 0.13, 'sine', 0.022);
   noiseHit(0.12, 0.028, 'highpass', 3200, 1600);
 }
 function sfxHurt() {
+  netSfxTap('hurt');
   if (!audioReady() || !sfxReady('hurt', 120)) return;
   sweep(250, 95, 0.2, 'sawtooth', 0.05);
   noiseHit(0.16, 0.03, 'lowpass', 800, 260);
@@ -12286,10 +12319,13 @@ let netSnapAt = 0;
 let netSnapTimer = null;
 let remoteInput = { x: 0, y: 0 };   // 房主：客机的移动意图
 let netFxQueue = [];                // 房主：待下发的打击反馈（伤害数字 / 浮动文字）
+let netSfxQueue = [];               // 房主：待下发的打击音效 key（去重后最多 NET_SFX_MAX 条）
+let netHitStopPulse = 0;            // 房主：这一拍触发过的顿帧时长（**脉冲**，不是剩余时长 —— 见 triggerHitStop）
 const NET_HB_MS = 25000;
 const NET_JOIN_TIMEOUT = 9000;
 const NET_SNAP_MS = 55;             // 约 18Hz：世界快照 + 打击反馈都挂在这个节拍上
 const NET_FX_MAX = 12;              // 一次最多带多少条反馈（纯表现，超出的直接丢，不值得为它排队）
+const NET_SFX_MAX = 8;              // 一次最多带多少条打击音效（同上，去重后基本用不满）
 const NET_SNAP_JUMP = 200;          // 客机贴位时，旧实体离新目标超过这个距离就认定「下标错位」→ 吸附而不平滑
 
 function netStatus(msg) {
@@ -12505,6 +12541,8 @@ function netHostBegin() {
 function netStartSnapshots() {
   if (netSnapTimer) clearInterval(netSnapTimer);
   netFxQueue.length = 0;      // 新的一局：别把上一局没发完的反馈带过来
+  netSfxQueue.length = 0;
+  netHitStopPulse = 0;
   netSnapTimer = setInterval(() => {
     if (!netJoined || !isLive()) return;
     netSend('snap', netSnapshot());
@@ -12512,19 +12550,23 @@ function netStartSnapshots() {
   }, NET_SNAP_MS);
 }
 
-// 打击反馈：伤害数字 / 浮动文字 / 屏幕抖动。**纯表现** —— 丢了不影响判定，所以不重发、不排队。
-//   客机不跑模拟，这些数据在它那边永远不会产生，没有这一条它打怪就是「怪默默掉血」。
+// 打击反馈：伤害数字 / 浮动文字 / 屏幕抖动 / 打击音效 / 顿帧。**纯表现** —— 丢了不影响判定，所以不重发、不排队。
+//   客机不跑模拟，这些数据在它那边永远不会产生，没有这一条它打怪就是「怪默默掉血、静音、也不顿帧」。
 function netSendFx() {
   const f = netFxQueue.splice(0, NET_FX_MAX);
   netFxQueue.length = 0;                       // 超出的直接丢
+  const snd = netSfxQueue.splice(0, NET_SFX_MAX);
+  netSfxQueue.length = 0;
+  const stop = netHitStopPulse;
+  netHitStopPulse = 0;
   const s = Math.round(shake * 10) / 10;
-  if (!f.length && s < 0.5) return;            // 没有反馈也没有震动：不发
-  netSend('fx', { shake: s, f });
+  if (!f.length && !snd.length && !stop && s < 0.5) return;   // 什么都没发生：不发
+  netSend('fx', { shake: s, f, snd, stop: Math.round(stop * 1000) / 1000 });
 }
 
-// 客机：把房主下发的打击反馈摆到自己的表现层上（伤害数字 / 浮动文字 / 震屏）。
-//   写的是 damageNumbers / shake —— 这两个本来就是渲染层自己的数据（render() 里自行推进），
-//   所以客机「灌进去 → render()」与它回放世界是同一套做法。
+// 客机：把房主下发的打击反馈摆到自己的表现层上（伤害数字 / 浮动文字 / 震屏 / 音效 / 顿帧）。
+//   写的是 damageNumbers / shake / hitStop —— 前两个是纯表现数据，hitStop 走 loop() 那条既有的
+//   「冻结逻辑、渲染照常」通道（客机那边冻结的就是「贴快照 + 推表现层」，效果与房主一致）。
 function netGuestFx(p) {
   const list = Array.isArray(p && p.f) ? p.f : [];
   for (const a of list) {
@@ -12534,6 +12576,15 @@ function netGuestFx(p) {
   }
   const s = Number(p && p.shake) || 0;
   if (s > shake) shake = s;
+  // 打击音效：照房主报过来的事件重放一遍（客机自己的音效设置与节流照常生效）
+  const snd = Array.isArray(p && p.snd) ? p.snd : [];
+  for (const k of snd) {
+    const fn = SFX_BY_KEY[k];
+    if (fn) fn();
+  }
+  // 顿帧：只收「触发过」的脉冲，不会与本地已有的顿帧互相抵消（取较长者）
+  const stop = Number(p && p.stop) || 0;
+  if (stop > hitStop) hitStop = stop;
 }
 
 // 把渲染需要的字段挑出来（不传判定用的计时器/集合，省带宽；坐标压到 1 位小数）

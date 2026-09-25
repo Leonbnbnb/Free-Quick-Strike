@@ -364,6 +364,32 @@ async function visualChecks() {
     assert(damageNumbers.length === 2 && damageNumbers[0].value === 37 && damageNumbers[1].text === '树怪苏醒！'
       && damageNumbers[1].life > damageNumbers[0].life && shake === 5,
       '客机把房主下发的反馈摆到自己的表现层（伤害数字 / 浮动文字 / 震屏）');
+    // V1.37：顿帧与打击音效同步 —— 客机不跑逻辑，命中音效与「飞剑贯穿顿帧」都无从产生，只能由房主报过来
+    sentFx.length = 0;
+    netRole = 'host'; hitStop = 0; netSfxQueue.length = 0; netHitStopPulse = 0;
+    sfxHit(); sfxHit(); sfxHit(); sfxThunder();
+    assert(netSfxQueue.join(',') === 'hit,thunder',
+      '房主侧：同类的打击音效一拍之内只记一条（去重，客机那边还有它自己的节流）');
+    triggerHitStop(0.02);
+    assert(Math.abs(hitStop - 0.02) < 1e-9 && Math.abs(netHitStopPulse - 0.02) < 1e-9,
+      '顿帧走 triggerHitStop 这个统一入口，房主侧照常冻结、同时记下脉冲');
+    hitStop = 0;
+    netSendFx();
+    assert(sentFx.length === 1 && sentFx[0].snd && sentFx[0].snd.join(',') === 'hit,thunder'
+      && Math.abs(sentFx[0].stop - 0.02) < 1e-9 && netSfxQueue.length === 0 && netHitStopPulse === 0,
+      '房主把打击音效与顿帧脉冲随反馈一起发出去（发完清空，不重发）');
+    netRole = 'guest';
+    const realHitSfx = SFX_BY_KEY.hit, realThunderSfx = SFX_BY_KEY.thunder;
+    const playedSnd = [];
+    SFX_BY_KEY.hit = () => playedSnd.push('hit');
+    SFX_BY_KEY.thunder = () => playedSnd.push('thunder');
+    netGuestFx({ snd: ['hit', 'thunder', 'nope'], stop: 0.02 });
+    SFX_BY_KEY.hit = realHitSfx; SFX_BY_KEY.thunder = realThunderSfx;
+    assert(playedSnd.join(',') === 'hit,thunder' && Math.abs(hitStop - 0.02) < 1e-9,
+      '客机照房主报来的事件重放打击音效，并把顿帧脉冲接到自己的冻结通道（未知 key 直接忽略）');
+    // 客机那次顿帧走的就是 loop() 里那条既有通道：hitStop > 0 时跳过 update()（= 不贴快照、不推表现层），
+    // 渲染照常 —— 观感与房主那边那一下一致。
+    hitStop = 0;
     damageNumbers = []; shake = 0;
     netSend = savedSend;
     netRole = null; netPeer = '';
@@ -1537,6 +1563,11 @@ async function visualChecks() {
     // 同理：负 dt 不再让计时器倒着走（长任务后 rAF 时间戳可能早于 last）
     assert(frameDt(-500) === 0 && Math.abs(frameDt(1e9) - 0.05) < 1e-12 && Math.abs(frameDt(16) - 0.016) < 1e-9,
       '单帧 dt 被钳在 [0, 0.05] 秒（负帧间隔不会倒着走计时器）');
+    // 收尾：把调试面板关掉再回首页。
+    //   上面那条「调试面板可展开」是 toggle 语义 —— 面板若是开着的，这里再 toggle 一次就变成「可关闭」，断言必挂。
+    //   平时靠 loop() 里的 devTickHud（非对局态自动收起）兜底，但**同一页面里连着跑两遍**时，
+    //   两次之间不一定夹得到一个 rAF 帧，于是第二遍会莫名其妙挂 —— 收尾显式关掉，让这套检查可重复运行。
+    setDevHud(false);
     visualScene('home');
     passed.push('完成：' + frames + ' 帧，' + passed.length + ' 项检查通过');
     parent.reportVisual(passed.join(' / '));
