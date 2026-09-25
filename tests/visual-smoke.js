@@ -367,6 +367,38 @@ async function visualChecks() {
     damageNumbers = []; shake = 0;
     netSend = savedSend;
     netRole = null; netPeer = '';
+    // V1.37 修复：`phx_join` 的回执必须按**本次 join 用的 ref** 认，不能写死 '1'。
+    //   （netRef 全局自增且不随 netClose 清零 —— 写死 '1' 时，第 2 次及以后的连接会卡满
+    //    NET_JOIN_TIMEOUT 才失败，表现为「退出房间后再建一次就连不上」。）
+    const savedWS = window.WebSocket, savedAvail = coopAvailable, savedInfo = netInfo;
+    const fakes = [];
+    class FakeWS {
+      constructor() { this.readyState = 1; this.sent = []; fakes.push(this); }
+      send(raw) { this.lastMsg = JSON.parse(raw); this.sent.push(this.lastMsg); }
+      close() { this.readyState = 3; }
+    }
+    window.WebSocket = FakeWS;
+    coopAvailable = () => true;
+    netInfo = { url: 'ws://fake.invalid/realtime', key: 'k', table: 'scores' };
+    const shakeHand = async code => {
+      const p = netConnect(code, 'host');
+      await new Promise(r => setTimeout(r, 0));
+      const ws = fakes[fakes.length - 1];
+      ws.onopen();
+      const ref = ws.sent[0].ref;
+      // 服务端按发出去的 ref 回执 —— 这里故意只回「真实的那个 ref」
+      ws.onmessage({ data: JSON.stringify({ event: 'phx_reply', ref, payload: { status: 'ok' } }) });
+      return { ok: await p, ref };
+    };
+    const hs1 = await shakeHand('TSTAAA');
+    netClose();
+    const hs2 = await shakeHand('TSTAAA');
+    assert(hs1.ok && hs2.ok && hs1.ref !== hs2.ref,
+      '反复连接都能握手成功（join 回执按本次 join 的 ref 认，不是写死的 1）');
+    netClose();
+    window.WebSocket = savedWS;
+    coopAvailable = savedAvail;
+    netInfo = savedInfo;
     // 上面 visualCombat() 重掷了世界，terrainCache 因此失效；紧随其后的「主题不改变地形」断言
     // 会读 terrainCache，所以这里先渲染一帧把它重建出来（这不是游戏行为，只是补齐测试前置）。
     render();

@@ -12274,6 +12274,7 @@ let netSocket = null;
 let netTopic = '';
 let netJoined = false;
 let netRef = 1;
+let netJoinRef = '';            // 本次 phx_join 用的 ref（服务端按它回执；**不能写死 '1'**，见 netConnect）
 let netHbTimer = null;
 let netJoinTimer = null;
 let netRole = null;             // 'host' | 'guest'
@@ -12305,12 +12306,14 @@ function netFetchInfo() {
     .catch(() => null);
 }
 
+// 发一条原始消息。**返回这条消息用的 ref**（'' = 没发出去）—— 调用方需要靠它认服务端的回执。
 function netSendRaw(event, payload, join) {
-  if (!netSocket || netSocket.readyState !== 1) return false;
-  const msg = { topic: netTopic, event, payload, ref: String(netRef++) };
-  if (join) msg.join_ref = '1';
+  if (!netSocket || netSocket.readyState !== 1) return '';
+  const ref = String(netRef++);
+  const msg = { topic: netTopic, event, payload, ref };
+  if (join) msg.join_ref = ref;
   netSocket.send(JSON.stringify(msg));
-  return true;
+  return ref;
 }
 
 // 广播一条业务消息（对方通过 netOn 收到）
@@ -12390,7 +12393,10 @@ function netConnect(code, role) {
 
     ws.onopen = () => {
       if (netSocket !== ws) return;
-      netSendRaw('phx_join', { config: { broadcast: { self: false } } }, true);
+      // **记住这次 join 用的 ref**：服务端的回执按它回来。**不能写死 '1'** ——
+      // netRef 是全局自增且不随 netClose 清零，写死 '1' 会导致「退出房间后再建一次 / 之前发过任何广播」
+      // 时回执永远对不上 → 卡满 NET_JOIN_TIMEOUT → 误报「联机通道未响应」。（V1.37 修）
+      netJoinRef = netSendRaw('phx_join', { config: { broadcast: { self: false } } }, true);
       netHbTimer = setInterval(() => {
         if (netSocket === ws) netSocket.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: 'hb' }));
       }, NET_HB_MS);
@@ -12404,7 +12410,7 @@ function netConnect(code, role) {
       let m;
       try { m = JSON.parse(ev.data); } catch (e) { return; }
       if (m.event === 'phx_reply') {
-        if (m.ref === '1') {
+        if (m.ref === netJoinRef) {          // 只认「本次 join」的回执（见 netJoinRef 的注释）
           netJoined = !!(m.payload && m.payload.status === 'ok');
           if (netJoinTimer) { clearTimeout(netJoinTimer); netJoinTimer = null; }
           if (!netJoined) netAbort('联机频道加入失败');
