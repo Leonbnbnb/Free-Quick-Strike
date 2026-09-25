@@ -10296,7 +10296,7 @@ function updatePlayerCompanions(p, dt) {
 function update(dt) {
   if (!isLive()) return;                 // 非对局状态（菜单 / 暂停 / 升级 / 首领奖励 / 商人 / 结算）世界一律静止
   // V1.37 客机：**不跑模拟** —— 世界完全由房主的快照驱动，这里只把快照贴回全局
-  if (netRole === 'guest') { netGuestTick(); return; }
+  if (netRole === 'guest') { netGuestTick(dt); return; }
   if (resumeT > 0) { resumeT = Math.max(0, resumeT - dt); return; }   // 读秒期间世界静止
   if (devInvuln) squad.invulnT = Math.max(squad.invulnT, 0.2);   // 调试：无敌（复用受伤免疫）
   gameTime += dt;
@@ -12290,6 +12290,7 @@ const NET_HB_MS = 25000;
 const NET_JOIN_TIMEOUT = 9000;
 const NET_SNAP_MS = 55;             // 约 18Hz：世界快照 + 打击反馈都挂在这个节拍上
 const NET_FX_MAX = 12;              // 一次最多带多少条反馈（纯表现，超出的直接丢，不值得为它排队）
+const NET_SNAP_JUMP = 200;          // 客机贴位时，旧实体离新目标超过这个距离就认定「下标错位」→ 吸附而不平滑
 
 function netStatus(msg) {
   netStatusText = msg;
@@ -12595,17 +12596,26 @@ function netGuestBegin(p) {
 }
 
 // 客机的时间片：**不跑模拟**，只把最新快照贴回全局，然后照常渲染
-function netGuestTick() {
-  netApplySnap();
+function netGuestTick(dt) {
+  netApplySnap(dt);
+  // 客机不跑 update()，但**表现层的寿命仍然要减**：伤害数字 / 屏幕抖动都是在 update() 尾部推进的，
+  // 少了这一步它们会永远留在屏幕上，而且越积越多 —— 表现就是「伤害数字不消失 + 越玩越卡」。（V1.37 修）
+  // （粒子 / 冲击波 / 波次横幅这些同上，但它们只由房主的模拟产生、没进快照，客机这边本来就是空的。）
+  updateDamageNumbers(dt);
+  shake = Math.max(0, shake - dt * 50);
   updateCamera();
 }
 
-// 客机：每帧按最新快照把世界「贴」回全局（渲染层只读，所以直接调 render() 即可）
-function netApplySnap() {
+// 客机：每帧按最新快照把世界「贴」回全局（渲染层只读，所以贴完直接 render() 即可）
+//   两条要点：
+//   · **位置平滑逼近，不硬吸附** —— 快照只有约 18Hz，直接吸附看着就是一顿一顿的；
+//     `k` 按帧长算（与刷新率无关），高刷屏不会因此追得更快。
+//   · **复用同一批对象** —— 每帧重建上百个敌人 / 子弹对象会让 GC 频繁介入，这是客机发卡的主因之一。
+function netApplySnap(dt) {
   if (!netSnap) return;
   const s = netSnap;
   const lerp = (cur, want, k) => cur + (want - cur) * k;
-  const k = Math.min(1, 0.35);
+  const k = Math.min(1, dt * 18);              // ≈ 0.30 @60fps
   (s.players || []).forEach(sp => {
     const p = players[sp.id];
     if (!p) return;
@@ -12632,17 +12642,39 @@ function netApplySnap() {
       sd.owner = sp.id;
     });
   });
-  // 世界实体：直接替换成快照内容（绘制函数只读字段，缺字段会是 undefined，不会抛）
-  enemies = (s.enemies || []).map(a => ({
-    type: a[0], x: a[1], y: a[2], hp: a[3], maxHp: a[4], r: a[5], facing: a[6],
-    frostT: (a[7] & 1) ? 1 : 0, burnT: (a[7] & 2) ? 1 : 0, freezeT: (a[7] & 4) ? 1 : 0,
-    kind: a[8] || undefined, elite: !!a[9], dead: false,
-  }));
-  bullets = (s.bullets || []).map(a => ({ x: a[0], y: a[1], r: a[2], color: a[3], vx: 0, vy: 0 }));
-  drops = (s.drops || []).map(a => ({ x: a[0], y: a[1], value: a[2], r: a[3] }));
-  enemyBullets = (s.enemyBullets || []).map(a => ({ x: a[0], y: a[1], r: a[2], color: a[3] }));
+  // 敌人 / 掉落：慢速、被盯着的实体 → 平滑逼近（下标的旧实体离新目标太远就直接吸附，见 applySnapList）
+  applySnapList(enemies, s.enemies || [], k, true, (e, a) => {
+    e.type = a[0]; e.hp = a[3]; e.maxHp = a[4]; e.r = a[5]; e.facing = a[6];
+    e.frostT = (a[7] & 1) ? 1 : 0; e.burnT = (a[7] & 2) ? 1 : 0; e.freezeT = (a[7] & 4) ? 1 : 0;
+    e.kind = a[8] || undefined; e.elite = !!a[9]; e.dead = false;
+  });
+  applySnapList(drops, s.drops || [], k, true, (e, a) => { e.value = a[2]; e.r = a[3]; });
+  // 子弹：数量多、寿命短、下标错位频繁 → 只复用对象、位置仍吸附（平滑反而会「滑向旁边的子弹」）
+  applySnapList(bullets, s.bullets || [], k, false, (e, a) => { e.r = a[2]; e.color = a[3]; e.vx = 0; e.vy = 0; });
+  applySnapList(enemyBullets, s.enemyBullets || [], k, false, (e, a) => { e.r = a[2]; e.color = a[3]; });
   gameTime = s.t; wave = s.wave; kills = s.kills; runCoins = s.runCoins;
   level = s.level; xp = s.xp; xpToNext = s.xpToNext;
+}
+
+// 把一个快照数组贴回本地实体数组：**复用对象**（不重新分配），位置按 `smooth` 决定「平滑逼近」还是「直接吸附」。
+// 下标匹配的硬伤是「数组中间少了一个，后面整体错位一格」—— 所以旧实体离新目标超过 NET_SNAP_JUMP 时一律吸附，
+// 这样错位只会闪一下，不会整排滑过去。
+function applySnapList(arr, list, k, smooth, take) {
+  arr.length = list.length;
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    const e = arr[i] || (arr[i] = {});
+    take(e, a);
+    const tx = a[1], ty = a[2];
+    if (smooth && e.__snap && Math.hypot(tx - e.x, ty - e.y) <= NET_SNAP_JUMP) {
+      e.x += (tx - e.x) * k;
+      e.y += (ty - e.y) * k;
+    } else {
+      e.x = tx;
+      e.y = ty;
+    }
+    e.__snap = true;
+  }
 }
 
 // 客机：把本机的移动意图上行（只在值变化时才发，省流量）

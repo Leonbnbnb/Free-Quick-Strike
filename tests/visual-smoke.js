@@ -367,6 +367,30 @@ async function visualChecks() {
     damageNumbers = []; shake = 0;
     netSend = savedSend;
     netRole = null; netPeer = '';
+    // V1.37 修复：客机不跑 update()，所以**表现层的寿命得在它自己的时间片里减**。
+    //   漏了这一步的表现就是「伤害数字永远留在屏幕上 + 越积越多、越玩越卡」+「画面一直在抖」。
+    netRole = 'guest';
+    state = 'playing';
+    netSnap = { t: 1, wave: 1, level: 1, xp: 0, xpToNext: 10, kills: 0, runCoins: 0, difficulty: 1, bossKills: 0, players: [], enemies: [], bullets: [], drops: [], enemyBullets: [] };
+    damageNumbers = []; shake = 0;
+    netGuestFx({ shake: 6, f: [[100, 100, 5, '#fff', 0]] });
+    assert(damageNumbers.length === 1 && shake === 6, '客机把房主下发的打击反馈摆上自己的表现层');
+    for (let i = 0; i < 60; i++) update(1 / 60);        // 客机时间片跑一秒
+    assert(damageNumbers.length === 0 && shake === 0,
+      '客机自己也会把伤害数字的寿命与屏幕抖动减掉（不会永远留在屏幕上、也不会一直抖）');
+    // 贴快照要复用实体对象、位置平滑逼近（每帧重建上百个对象是客机发卡的主因之一）
+    const snapAt = (ex, ey) => ({ t: 2, wave: 1, level: 1, xp: 0, xpToNext: 10, kills: 0, runCoins: 0, difficulty: 1, bossKills: 0, players: [], bullets: [], drops: [], enemyBullets: [],
+      enemies: [['grunt', ex, ey, 10, 10, 14, 0, 0, '', 0]] });
+    netSnap = snapAt(100, 100); update(1 / 60);
+    const eRef = enemies[0];
+    netSnap = snapAt(110, 100); update(1 / 60);
+    assert(enemies[0] === eRef, '客机贴快照时复用同一批实体对象（不再每帧重建）');
+    assert(enemies[0].x > 100 && enemies[0].x < 110, '敌人位置是平滑逼近，不是硬吸附', 'x=' + enemies[0].x);
+    netSnap = snapAt(900, 100); update(1 / 60);
+    assert(enemies[0].x === 900, '旧实体离新目标太远（下标错位）时直接吸附，不会整排滑过去');
+    netSnap = null; damageNumbers = []; shake = 0;
+    enemies = []; bullets = []; drops = []; enemyBullets = [];
+    netRole = null; state = 'menu';
     // V1.37 修复：`phx_join` 的回执必须按**本次 join 用的 ref** 认，不能写死 '1'。
     //   （netRef 全局自增且不随 netClose 清零 —— 写死 '1' 时，第 2 次及以后的连接会卡满
     //    NET_JOIN_TIMEOUT 才失败，表现为「退出房间后再建一次就连不上」。）
@@ -815,7 +839,9 @@ async function visualChecks() {
     spawnEnemy('elite', squad.x + 300, squad.y); const boltHit = enemies[enemies.length - 1];
     spawnEnemy('elite', squad.x + 380, squad.y); const boltNear = enemies[enemies.length - 1];
     spawnEnemy('elite', squad.x + 700, squad.y); const boltFar = enemies[enemies.length - 1];
-    [boltHit, boltNear, boltFar].forEach(e => { e.hp = e.maxHp = 1e6; });
+    // 精英有概率随机带护盾，而护盾会先把溅射伤害吸收掉、hp 一点不掉 —— 这条断言测的是「溅射半径」，
+    // 所以把三个靶子的护盾清掉，否则测试会随刷新随机挂（实测约 1/10 概率）。
+    [boltHit, boltNear, boltFar].forEach(e => { e.hp = e.maxHp = 1e6; e.shield = 0; e.shieldMax = 0; });
     const nearHp0 = boltNear.hp, farHp0 = boltFar.hp;
     strikeEnemy(boltHit, 100, new Set());
     assert(boltNear.hp < nearHp0 && boltFar.hp === farHp0, '落雷范围伤害只波及半径内的敌人（半径外不掉血）');
