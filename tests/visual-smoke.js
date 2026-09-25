@@ -499,6 +499,51 @@ async function visualChecks() {
     window.WebSocket = savedWS;
     coopAvailable = savedAvail;
     netInfo = savedInfo;
+    // V1.37：双人难度放大 —— 怪的血量与数量要认得「场上有几个人」。
+    //   实测依据（同一套 build、同一随机种子）：两人队伍的总输出是单人的 1.84~1.98 倍
+    //   （纯步枪 build 恰好 2.00 倍），而怪的强度原本一点没变 —— 双人明显更轻松。
+    //   这里把「压力」按同一比例补回来（血量 ×1.6 × 出怪节奏 ×1.25 = 2.0 倍），**单人必须一点不变**。
+    visualSetup(); startGame(); state = 'playing';
+    wave = 10; bossKills = 0;
+    assert(coopExtra() === 0 && coopHpMul() === 1 && coopSpawnMul() === 1,
+      '单人局的双人放大倍率恒为 1（单人零行为变化）');
+    const soloIv = spawnInterval();
+    enemies = [];
+    spawnEnemy('grunt', squad.x + 60, squad.y);
+    const soloHp = enemies[enemies.length - 1].maxHp;
+    spawnEnemy('boss', squad.x + 60, squad.y, { noDrop: true });
+    const soloBossHp = enemies[enemies.length - 1].maxHp;
+    coopSpawnLocalAlly();
+    assert(coopExtra() === 1 && coopHpMul() === 1.6 && coopSpawnMul() === 1.25,
+      '双人局：血量 ×1.6、出怪节奏 ×1.25（相乘正好 2.0 倍，与实测的 1.84~1.98 对齐）');
+    assert(Math.abs(spawnInterval() - soloIv * 0.8) < 1e-6,
+      '双人局出怪间隔收紧到单人的 0.8 倍', 'solo=' + soloIv + ' duo=' + spawnInterval());
+    enemies = [];
+    spawnEnemy('grunt', squad.x + 60, squad.y);
+    const duoHp = enemies[enemies.length - 1].maxHp;
+    spawnEnemy('boss', squad.x + 60, squad.y, { noDrop: true });
+    const duoBossHp = enemies[enemies.length - 1].maxHp;
+    assert(Math.abs(duoHp / soloHp - 1.6) < 1e-9 && Math.abs(duoBossHp / soloBossHp - 1.6) < 1e-9,
+      '双人局小怪与首领的血量都是单人的 1.6 倍', '小怪 ' + soloHp + '→' + duoHp + ' · 首领 ' + soloBossHp + '→' + duoBossHp);
+    // 「命中时才生成」的子弹（火球 / 散弹分裂碎片）是在 updateBullets 里产生的，**不在 `stampNewBullets`
+    //   的覆盖范围内**（那只盖两个玩家相位）—— 必须自己盖归属戳，否则双人时会一路算到房主头上。
+    enemies = []; bullets = [];
+    withCtx(players[1], () => { summons.length = 0; addSummon('fireball'); });
+    spawnEnemy('grunt', players[1].squad.x + 60, players[1].squad.y);
+    withCtx(players[1], () => { const s = getSummon('fireball'); s.cd = 0; triggerFireball(); });
+    assert(bullets.length > 0 && bullets[0].owner === 1,
+      '命中触发的火球子弹自己带归属戳（否则双人时客机的火球会算到房主头上）');
+    // 落雷的窗口账本（lightningCdT / lightningPending）是**按玩家**的，而推进它的 updatePendingLightning
+    //   跑在两个玩家相位之间的世界相位、没有上下文 —— 必须逐个切上下文，否则只有当前生效玩家的窗口会走，
+    //   客机第一发之后 lightningCdT 永远停在硬间隔上（实测：双人 20s 内房主 144 伤害 / 客机只有 18）。
+    withCtx(players[0], () => { lightningCdT = 1; lightningPending = false; });
+    withCtx(players[1], () => { lightningCdT = 1; lightningPending = false; });
+    updatePendingLightning(0.5);
+    assert(Math.abs(players[0].lightningCdT - 0.5) < 1e-9 && Math.abs(players[1].lightningCdT - 0.5) < 1e-9,
+      '落雷的窗口计时两名玩家各自推进（客机不会在第一发之后再也劈不出来）');
+    players = [P1]; activePlayer = P1; captureCtx(P1);
+    enemies = []; bullets = []; enemyBullets = [];
+    state = 'menu';
     // 上面 visualCombat() 重掷了世界，terrainCache 因此失效；紧随其后的「主题不改变地形」断言
     // 会读 terrainCache，所以这里先渲染一帧把它重建出来（这不是游戏行为，只是补齐测试前置）。
     render();

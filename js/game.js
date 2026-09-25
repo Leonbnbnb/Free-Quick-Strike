@@ -4788,7 +4788,11 @@ function fireFireballBullet(x, y, target, s, jitter = 0) {
   const burnDps = s.ignite ? def.burnDps : 0;
   const burnTime = s.ignite ? (s.burnTime || 1) : 0;
   const base = Math.atan2(target.y - y, target.x - x) + jitter;
-  bullets.push({ x, y, vx: Math.cos(base) * def.speed, vy: Math.sin(base) * def.speed, dmg, r: 6, aoe, burnDps, burnTime, color: def.color, pierce: 0, split: 0, hit: null, fireball: true });
+  // V1.37：火球是**命中时触发的二次生成**，而命中结算发生在 updateBullets 里 ——
+  //   那段不在 `stampNewBullets` 的覆盖范围内（它只盖两个玩家相位），必须在这里自己盖归属戳。
+  //   漏了的话这发火球会一路走到 `players[b.owner]` = undefined，按「当前生效玩家」结算：
+  //   双人时客机的火球伤害会记到房主头上，还会用错人的易伤 / 吸血。
+  bullets.push({ x, y, vx: Math.cos(base) * def.speed, vy: Math.sin(base) * def.speed, dmg, r: 6, aoe, burnDps, burnTime, color: def.color, pierce: 0, split: 0, hit: null, fireball: true, owner: idOfActive() });
 }
 
 // 雷电：子弹「命中敌人」时按概率召唤闪电（元素伤害），无冷却。
@@ -4839,8 +4843,17 @@ function rollLightningOnHit(v) {
 }
 
 function updatePendingLightning(dt) {
-  if (lightningCdT > 0) lightningCdT = Math.max(0, lightningCdT - dt);
-  if (lightningCdT <= 0 && lightningPending) tryLightning();   // 窗口结束：用窗口内的命中补一次判定
+  // V1.37：落雷的「窗口」账本是**按玩家**的（`lightningCdT` / `lightningPending` 在槽位里），
+  //   而本函数跑在两个玩家相位之间的世界相位、没有上下文 —— 不逐个切上下文的话，
+  //   只有「当前生效玩家」的窗口会走：客机第一次落雷后 `lightningCdT` 就永远停在硬间隔上，
+  //   之后再也劈不出来（实测双人 20s 里房主 144 伤害、客机只有 18）。
+  //   单人局 players 只有一名且就是当前上下文，`withCtx` 直接执行、与改动前完全等价。
+  for (const p of players) {
+    withCtx(p, () => {
+      if (lightningCdT > 0) lightningCdT = Math.max(0, lightningCdT - dt);
+      if (lightningCdT <= 0 && lightningPending) tryLightning();   // 窗口结束：用窗口内的命中补一次判定
+    });
+  }
   if (!pendingLightning.length) return;
   for (let i = pendingLightning.length - 1; i >= 0; i--) {
     const it = pendingLightning[i];
@@ -5995,7 +6008,8 @@ function tryShotgunSplit(e, b) {
   const n = b.splitCount || 2;
   for (let i = 0; i < n; i++) {
     const ang = Math.atan2(t.y - e.y, t.x - e.x) + (rngCombat() - 0.5) * 0.5;
-    bullets.push({ x: e.x, y: e.y, vx: Math.cos(ang) * def.speed, vy: Math.sin(ang) * def.speed, dmg: b.dmg, r: 3, aoe: 0, burnDps: 0, burnTime: 0, color: def.color, pierce: 0, split: 0, hit: null });
+    // V1.37：同上（二次生成的子弹）—— 这发碎片也要自己盖归属戳，否则双人时会算到房主头上
+    bullets.push({ x: e.x, y: e.y, vx: Math.cos(ang) * def.speed, vy: Math.sin(ang) * def.speed, dmg: b.dmg, r: 3, aoe: 0, burnDps: 0, burnTime: 0, color: def.color, pierce: 0, split: 0, hit: null, owner: idOfActive() });
   }
 }
 
@@ -7375,6 +7389,18 @@ function enemyDmgScale() {
   if (bossKills >= 1) s += 0.025 * Math.max(0, wave - 10) + 0.10 * (bossKills - 1);
   return s;
 }
+// 双人难度放大（V1.37）：单人时恒为 1 —— **零行为变化**（`players.length - 1 === 0`）。
+//   实测依据（同一套 build 打同一批靶子、同一随机种子）：两人队伍的总输出是单人的
+//   **1.84 ~ 1.98 倍**（只用步枪时正好 2.00 倍），而怪的血量 / 数量原本一点没变 —— 所以双人明显更轻松。
+//   这里把「压力」按同一比例补回来：**血量 ×1.6 与出怪节奏 ×1.25 相乘正好 2.0 倍**，
+//   与实测区间基本对齐（刻意略高一点点，别让合作变成「更累」）。
+//   伤害刻意不动：两名玩家各有各的血池、怪又会分成两拨，受伤本来就比单人宽松。
+//   出怪节奏走 `spawnInterval()` 的 pace（间隔 = 4.8 / pace，pace ×1.25 → 间隔 ×0.8）；
+//   血量在 `spawnEnemy()` 里乘 —— 首领 / 精英 / 分裂子体 / 被召唤的小怪都同一条路，一起放大。
+const COOP_HP = 0.6, COOP_SPAWN = 0.25;      // 每多一名玩家叠加的比例
+function coopExtra() { return Math.max(0, players.length - 1); }
+function coopHpMul() { return 1 + COOP_HP * coopExtra(); }
+function coopSpawnMul() { return 1 + COOP_SPAWN * coopExtra(); }
 // 首领血量倍率（V1.11 大幅加强）：第 1 个首领为基准，之后每个 +100%（后期血量是旧版的数倍）
 function bossHpScale() { return 1 + bossKills; }
 // 单只小怪的最终基础血量（精英 / 树怪走折半曲线，见 HEAVY_HP_CURVE）
@@ -7424,11 +7450,12 @@ function waveGoalInfo() {
 function waveEta(sec) { return Number.isFinite(sec) ? fmtTime(sec) : '—'; }
 
 // 出怪间隔：随波次线性收紧（`4.8 / pace`），`spawnScale()`（Boss 数）再乘一档加速（封顶 2 倍）；
-// 下限 0.10s。标定后每波出怪量约为：波 1 ≈ 4 只、波 10 ≈ 17、波 20 ≈ 55、波 30 ≈ 93、波 50 ≈ 151。
+// 双人再按 `coopSpawnMul()` 收一档（×1.25 出怪量）；下限 0.10s。
+// 标定后每波出怪量约为：波 1 ≈ 4 只、波 10 ≈ 17、波 20 ≈ 55、波 30 ≈ 93、波 50 ≈ 151。
 // 基数 4.8 是按「12 局自动走位的存活测试」扫出来的：与旧版清场制（平均存活 127s / 等级 6.7 /
 // 同屏峰值 13）基本持平（125s / 6.7 / 12），既去掉了「等清场」的死节奏，难度又没有额外飙升。
 function spawnInterval() {
-  const pace = (1 + 0.35 * (wave - 1)) * Math.min(2.0, spawnScale());
+  const pace = (1 + 0.35 * (wave - 1)) * Math.min(2.0, spawnScale()) * coopSpawnMul();
   return Math.max(0.10, (4.8 / pace) * earlySpawnMul());
 }
 
@@ -7498,8 +7525,8 @@ function spawnEnemy(type, px, py, opts = {}) {
   const bossDef = kind ? BOSS_KINDS[kind] : null;
 
   // 血量：小怪走 scaledEnemyHp（前 / 中 / 后三段曲线，精英与树怪折半），首领走「种类血量 × bossHpScale」
-  // hpMul 供分裂出的子精英使用（同一套曲线，只按比例缩水）
-  const hp = (bossDef ? bossDef.hp * bossHpScale() : scaledEnemyHp(t)) * (opts.hpMul || 1);
+  // hpMul 供分裂出的子精英使用（同一套曲线，只按比例缩水）；双人再乘 coopHpMul()（见上）
+  const hp = (bossDef ? bossDef.hp * bossHpScale() : scaledEnemyHp(t)) * (opts.hpMul || 1) * coopHpMul();
   // 护盾：护盾兵 50%；精英的护盾改为「护盾词缀」提供（见 AFFIX_DEFS）
   const shield = t === 'shielder' ? Math.round(hp * 0.5) : 0;
 
