@@ -191,6 +191,185 @@ async function visualChecks() {
     renderCoop();
     assert(document.getElementById('friend-badge').classList.contains('hidden'), '房间与邀请都清掉后红点隐藏');
     assert(document.getElementById('coop-invites').classList.contains('hidden'), '没有邀请时邀请区收起');
+    // V1.37：双人槽位内核 —— 两名玩家各自独立（build / 小兵 / 血池），命中按 owner 记账
+    visualCombat();
+    const ally = coopSpawnLocalAlly();
+    assert(players.length === 2 && ally.id === 1 && ally.soldiers.length > 0
+      && ally.soldiers.every(s => s.owner === ally.id),
+      '能追加一名玩家 P2，且他的小兵都归他（soldier.owner === P2.id）');
+    // owner 必须存 id 而不是对象引用：引用会让 soldiers ⇄ player 成环，
+    // saveRun() 的 JSON.stringify 抛错后静默把 meta.run 置空 ——「返回主菜单后继续」会失效。
+    assert(!!JSON.parse(JSON.stringify(snapshotRun())),
+      '双人局的对局快照仍可 JSON 序列化（owner 是玩家 id，不成环）');
+    assert(ally.stats !== stats && ally.weapons !== weapons && ally.stats.bulletDamage === 1
+      && ally.weapons.length === 1,
+      'P2 持有自己独立的一份 build（stats / weapons 都不是本机那份）');
+    assert(activePlayer === P1 && squad === P1.squad && soldiers === P1.soldiers,
+      '世界相位里全局仍代表本机玩家');
+    // 零散对局态也要按玩家分：雷电硬性间隔 / 受伤来源统计 / 宠物熟练度（否则双人下互相干扰）
+    P1.lightningCdT = 0; P1.lastHurt = ''; P1.petRunExp = 0;
+    withCtx(ally, () => { lightningCdT = 2; lastHurt = 'boss'; hurtBy = { boss: 5 }; petRunExp = 7; });
+    assert(lightningCdT === 0 && lastHurt === '' && petRunExp === 0 && P1.petRunExp === 0,
+      '切到客机槽位只改它自己那份（本机的雷电 CD / 受伤来源 / 宠物熟练度不受影响）');
+    assert(ally.lightningCdT === 2 && ally.lastHurt === 'boss' && ally.hurtBy.boss === 5 && ally.petRunExp === 7,
+      '客机槽位里存的是它自己的雷电 CD / 受伤来源 / 宠物熟练度');
+    withCtx(ally, () => { lightningCdT = 0; lastHurt = ''; hurtBy = {}; petRunExp = 0; });   // 还原，别影响后面
+    assert(Math.abs(hpOf(ally) - ally.hp) < 1e-9, 'hpOf 对非本机玩家走它自己的血池');
+    // 敌人索敌跨两名玩家
+    const nearAlly = nearestSoldier(ally.squad.x, ally.squad.y);
+    assert(!!nearAlly && nearAlly.owner === ally.id, '敌人索敌能找到客机最近的兵（跨玩家）');
+    const nearMine = nearestSoldier(squad.x, squad.y);
+    assert(!!nearMine && nearMine.owner === P1.id, '本机附近仍然锁到本机自己的兵');
+    // 扣血按 owner 走：打客机的兵不能扣到本机头上
+    const p1HpBefore = squadHp, p2HpBefore = ally.hp;
+    damageSoldier(ally.soldiers[0], 10, 'melee');
+    assert(Math.abs(ally.hp - (p2HpBefore - 10)) < 1e-6 && Math.abs(squadHp - p1HpBefore) < 1e-9,
+      '打客机的兵只扣客机的血池，本机血池一点不动');
+    assert(activePlayer === P1, '按 owner 扣血之后全局切回本机');
+    // V1.37：范围伤害 / 站位分离必须跨两名玩家（否则客机在小怪与首领面前是「隐形人」）
+    const p1PosBackup = soldiers.map(s => ({ x: s.x, y: s.y }));
+    const p2PosBackup = ally.soldiers.map(s => ({ x: s.x, y: s.y }));
+    soldiers.forEach(s => { s.x = 0; s.y = 0; });                            // 把本机的兵挪开
+    ally.soldiers.forEach(s => { s.x = ally.squad.x; s.y = ally.squad.y; });
+    assert(anySoldierIn(ally.squad.x, ally.squad.y, 10) === ally.soldiers[0],
+      '半径判定能命中客机的小兵（范围内只有它）');
+    const allyHpBefore2 = ally.hp;
+    bomberBlast(ally.squad.x, ally.squad.y, 60, 10);
+    assert(Math.abs(ally.hp - (allyHpBefore2 - 10)) < 1e-6, '自爆怪的爆炸打到客机上（跨玩家范围伤害）');
+    const enemiesBackup = enemies.slice();
+    enemies = [];
+    spawnEnemy('grunt', ally.soldiers[0].x + 2, ally.soldiers[0].y + 2);
+    const allyFoe = enemies[0];
+    const allyGap0 = Math.hypot(allyFoe.x - ally.soldiers[0].x, allyFoe.y - ally.soldiers[0].y);
+    separateEnemiesFromSquad();
+    const allyGap1 = Math.hypot(allyFoe.x - ally.soldiers[0].x, allyFoe.y - ally.soldiers[0].y);
+    assert(allyGap1 > allyGap0, '叠在客机身上的敌人会被推开（跨玩家站位分离）');
+    enemies = enemiesBackup;
+    soldiers.forEach((s, i) => { s.x = p1PosBackup[i].x; s.y = p1PosBackup[i].y; });
+    ally.soldiers.forEach((s, i) => { s.x = p2PosBackup[i].x; s.y = p2PosBackup[i].y; });
+    // 开火产生的子弹带 owner（命中结算时才知道该用谁的 build）
+    const bulletFrom = bullets.length;
+    spawnEnemy('grunt', ally.squad.x + 44, ally.squad.y);
+    updatePlayerCombat(ally, 1 / 60);
+    const allyBullets = bullets.slice(bulletFrom);
+    assert(allyBullets.length > 0 && allyBullets.every(b => b.owner === ally.id),
+      '客机开火产生的子弹带上 owner（命中时会算在客机账上）');
+    assert(activePlayer === P1 && squad === P1.squad, '玩家相位跑完，全局切回本机');
+    // V1.37：升级「各自选卡」—— 等级共享，但候选各抽各的、落点也各归各的 build
+    beginLevelUp();
+    const p1Picks = players[0].pendingPick, p2Picks = players[1].pendingPick;
+    assert(Array.isArray(p1Picks) && p1Picks.length > 0 && Array.isArray(p2Picks) && p2Picks.length > 0
+      && p1Picks !== p2Picks, '每名玩家各抽一份候选（两份数组互相独立）');
+    assert(upgrades === p1Picks, '面板摆的是本机那一份候选（与待选槽位是同一份引用）');
+    setLocalCards(pickUpgrades(choiceCount));               // 模拟重掷：候选换成新数组
+    assert(players[0].pendingPick === upgrades, '重掷后待选槽位跟着换（否则会按旧 id 找不到卡，选了等于没选）');
+    const p1Applied = P1.appliedIds.size, p2Applied = players[1].appliedIds.size;
+    applyUpgrade(players[0].pendingPick[0].id);
+    assert(P1.appliedIds.size === p1Applied + 1, '本机选完的卡落在本机玩家的 build 上');
+    assert(state === 'upgrade' && players[1].pendingPick, '队友还没选完，世界继续冻结');
+    resolvePick(players[1], players[1].pendingPick[0].id);  // 等效于房主收到客机的 pick:choose
+    assert(players[1].appliedIds.size === p2Applied + 1 && P1.appliedIds.size === p1Applied + 1,
+      '客机选的卡落在客机的 build 上（不串到本机）');
+    assert(state === 'playing' && !players.some(p => p.pendingPick), '所有人都选完才解冻');
+    // 客机侧的面板：候选由房主下发（只有 id + 文案），点一下就把选择回给房主
+    const savedRole = netRole;
+    netRole = 'guest';
+    netGuestPick({ level: 2, cards: [{ id: 'fake-1', name: '<b>假卡</b>', desc: '<img src=x>' }, { id: 'fake-2', name: '第二张', desc: '说明' }] });
+    const guestCards = document.querySelectorAll('#upgrade-cards .card');
+    assert(guestCards.length === 2 && guestCards[0].querySelector('strong').textContent.includes('<b>假卡</b>')
+      && !guestCards[0].querySelector('b') && !guestCards[0].querySelector('img'),
+      '客机按房主下发的候选渲染卡片，文案一律按纯文本处理（不解析 HTML）');
+    guestCards[1].click();
+    assert(state === 'playing', '客机点一张卡就收起面板（选择回给房主落地）');
+    netRole = savedRole;
+    // 全灭判据：两人都倒才算结束
+    const keepSoldiers = soldiers.slice();
+    soldiers.length = 0;
+    state = 'playing';
+    update(1 / 60);
+    assert(state === 'playing', '只有本机倒下时不算全灭（队友还活着）');
+    soldiers.push(...keepSoldiers);
+    players = [P1]; activePlayer = P1; captureCtx(P1);   // 还原成单人，别影响后面的断言
+    assert(players.length === 1 && activePlayer === P1, '能还原回单人局');
+    // 单人局的正式升级入口（经验满 → collectXp → beginLevelUp）与改动前一致：弹面板 + 选完立刻解冻
+    state = 'playing';
+    xpToNext = 1;
+    collectXp(200);
+    assert(state === 'upgrade' && P1.pendingPick === upgrades && upgrades.length > 0,
+      '单人局经验满级照常弹出三选一（走 beginLevelUp）');
+    applyUpgrade(upgrades[0].id);
+    assert(state === 'playing' && !P1.pendingPick, '单人局选完立刻解冻，不残留待选');
+    xp = 0; xpToNext = 999;
+    // V1.37：双人收场链路 —— 房主把结果下发、客机摆结算页、两边都退得回大厅
+    coopSpawnLocalAlly();
+    state = 'playing';
+    const sentEnd = [];
+    const sentFx = [];
+    const savedSend = netSend;
+    netSend = (ev, pl) => {
+      if (ev === 'run:end') sentEnd.push(pl);
+      if (ev === 'fx') sentFx.push(pl);
+      return true;
+    };
+    netRole = 'host'; netPeer = '客机乙';
+    gameOver(false);
+    assert(state === 'gameover' && sentEnd.length === 1 && sentEnd[0].won === false
+      && typeof sentEnd[0].wave === 'number' && typeof sentEnd[0].cause === 'string',
+      '房主收场时把这一局的波次 / 战绩 / 阵亡原因广播给客机（run:end）');
+    assert(document.getElementById('btn-restart').textContent === '回到大厅'
+      && document.getElementById('btn-change').classList.contains('hidden'),
+      '联机局的结算页只留「回到大厅」（「再来一局」要由房主在房间里重新开局）');
+    // 客机侧：收到房主的结果 → 用**房主那份**数字摆结算页（客机不跑模拟，也没有「学到的机制」统计）
+    netRole = 'guest';
+    runLearned = ['这条不该出现在客机的结算页'];
+    netOnEnd({ won: false, wave: 7, kills: 42, level: 5, time: 96, coins: 123, cause: 'melee', peerCause: 'shot' });
+    const guestStats = document.getElementById('go-stats').textContent;
+    assert(state === 'gameover' && document.getElementById('go-title').textContent === '冒险暂告一段落'
+      && guestStats.includes('波次 7') && guestStats.includes('击杀 42') && guestStats.includes('01:36'),
+      '客机的结算页用房主下发的数字（波次 / 击杀 / 时长）');
+    assert(document.getElementById('go-cause').textContent.includes('敌弹')
+      && !document.getElementById('go-cause').textContent.includes('近战')
+      && !document.getElementById('go-cause').textContent.includes('掉血主要来自'),
+      '客机的阵亡原因用它自己那一份（peerCause），不是房主的，也不拼「掉血主要来自」');
+    assert(document.getElementById('go-learned').classList.contains('hidden'),
+      '客机的结算页不显示「本局学到的机制」（那是房主侧的统计）');
+    assert(document.getElementById('go-coins-line').textContent.includes('由房主那一侧结算'),
+      '联机局的金币与成绩只在房主那侧结算，客机不重复结算');
+    // 看结算页时对方收场：不把结算数据收走
+    netOnEnd({ left: true });
+    assert(state === 'gameover' && players.length === 1 && P1.id === 0,
+      '看结算页时对方收场，结算页保持不动（只还原槽位）');
+    // 对局进行中对方收场：退回大厅
+    coopSpawnLocalAlly();
+    state = 'playing';
+    netOnEnd({ left: true });
+    assert(state === 'menu' && players.length === 1 && P1.id === 0 && !P1.pendingPick,
+      '对局中对方收场 → 退回大厅，槽位还原成单人、待选清空');
+    // V1.37：打击反馈同步 —— 房主攒伤害数字，客机摆到自己那边（客机不跑模拟，否则打怪没有任何反馈）
+    netRole = 'host';
+    netFxQueue.length = 0;
+    spawnDamageNumber(100, 200, 37, '#fff');
+    spawnFloatText(110.4, 210, '树怪苏醒！', '#8fe06a');
+    assert(netFxQueue.length === 2 && netFxQueue[0][2] === 37 && netFxQueue[0][4] === 0
+      && netFxQueue[1][2] === '树怪苏醒！' && netFxQueue[1][4] === 1,
+      '房主侧：伤害数字与浮动文字都进了「待下发」的反馈队列');
+    shake = 6;
+    netSendFx();
+    assert(sentFx.length === 1 && sentFx[0].f.length === 2 && sentFx[0].f[0][0] === 100
+      && Math.abs(sentFx[0].shake - 6) < 1e-9 && netFxQueue.length === 0,
+      '房主把攒下的反馈连同震屏一起发出去（发完清空队列，不重发）');
+    netRole = 'guest';
+    damageNumbers = []; shake = 0;
+    netGuestFx({ shake: 5, f: [[100, 200, 37, '#fff', 0], [110, 210, '树怪苏醒！', '#8fe06a', 1]] });
+    assert(damageNumbers.length === 2 && damageNumbers[0].value === 37 && damageNumbers[1].text === '树怪苏醒！'
+      && damageNumbers[1].life > damageNumbers[0].life && shake === 5,
+      '客机把房主下发的反馈摆到自己的表现层（伤害数字 / 浮动文字 / 震屏）');
+    damageNumbers = []; shake = 0;
+    netSend = savedSend;
+    netRole = null; netPeer = '';
+    // 上面 visualCombat() 重掷了世界，terrainCache 因此失效；紧随其后的「主题不改变地形」断言
+    // 会读 terrainCache，所以这里先渲染一帧把它重建出来（这不是游戏行为，只是补齐测试前置）。
+    render();
     visualScene('home');
     const hero = document.getElementById('char-preview');
     assert(hero.getBoundingClientRect().width > 0, '首页角色预览');

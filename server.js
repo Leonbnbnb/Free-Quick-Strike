@@ -224,6 +224,22 @@ function writeScores(list) {
   fs.writeFileSync(SCORES_FILE, JSON.stringify(list, null, 2), 'utf8');
 }
 
+// 本地没有 Supabase 的 scores 表，但**可以把 Realtime 连接信息透给前端** ——
+// 双人对战（合作房间）走的正是同一条 public broadcast 通道，本地开发要能联机调试，
+// 就必须和线上一样下发 { url, key }。配了 SUPABASE_URL + SUPABASE_ANON_KEY 才有；
+// 没配则和以前一样返回 null，前端排行榜退回轮询、联机功能提示不可用。
+const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+const SB_ANON = process.env.SUPABASE_ANON_KEY || '';
+
+function realtimeInfo() {
+  if (!SB_URL || !SB_ANON) return null;
+  return {
+    url: `${SB_URL.replace(/^http/, 'ws')}/realtime/v1/websocket`,
+    key: SB_ANON,
+    table: 'scores',   // 与线上 api/leaderboard.js 同一口径（前端只拿它订阅 postgres_changes）
+  };
+}
+
 async function handleLeaderboardApi(req, res) {
   const list = readScores();
 
@@ -235,7 +251,7 @@ async function handleLeaderboardApi(req, res) {
       .sort((a, b) => (b.best_wave - a.best_wave) || String(a.updated_at).localeCompare(String(b.updated_at)))
       .slice(0, limit)
       .map((row, i) => ({ rank: i + 1, username: row.username, bestWave: row.best_wave, updatedAt: row.updated_at }));
-    sendJson(res, 200, { ok: true, top, realtime: null });
+    sendJson(res, 200, { ok: true, top, realtime: realtimeInfo() });
     return;
   }
 

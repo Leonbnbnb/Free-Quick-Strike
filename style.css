@@ -1665,6 +1665,15 @@ input[type='checkbox'] {
   gap: 10px;
 }
 
+/* 双人各自选卡：本机先选完时占位，等队友选完才解冻（V1.37） */
+.pick-wait {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 24px 12px;
+  text-align: center;
+  opacity: 0.75;
+}
+
 .card {
   width: 100%;
   margin: 0;

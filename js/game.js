@@ -1888,8 +1888,8 @@ const STATE_TRANSITIONS = {
   menu:       ['playing'],
   playing:    ['paused', 'upgrade', 'bossreward', 'merchant', 'gameover', 'menu'],
   paused:     ['playing', 'upgrade', 'menu'],
-  upgrade:    ['playing', 'paused'],
-  bossreward: ['playing'],
+  upgrade:    ['playing', 'paused', 'menu'],
+  bossreward: ['playing', 'menu'],
   merchant:   ['playing'],
   gameover:   ['playing', 'menu'],
 };
@@ -3508,7 +3508,11 @@ function buildUpgradePool() {
 
 // ==================== 初始化 / 重置 ====================
 function makeSoldier() {
-  return { x: squad.x, y: squad.y };
+  // V1.37：带上归属。敌人索敌会跨两名玩家找「最近的那个兵」，扣血要能找回自己的血池。
+  // **存的是玩家 id（数字），不是玩家对象引用** —— 引用会让 soldiers ⇄ player 成环，
+  // snapshotRun() / saveRun() 的 JSON.stringify 会直接抛「Converting circular structure to JSON」，
+  // 结果是「返回主菜单后继续」静默失效。见 playerOf()。
+  return { x: squad.x, y: squad.y, owner: activePlayer ? activePlayer.id : 0 };
 }
 
 function addSoldier() {
@@ -3676,18 +3680,25 @@ function separateEnemies() {
 // 敌人不能与小兵（玩家）重叠：把敌人逐个推出小兵的碰撞圈。
 // 分离正好把它停在「相切」，所以接触伤害的判定要多留 CONTACT_PAD 的余量（见 updateEnemies）。
 const CONTACT_PAD = 6;
+// V1.37 双人：**每名玩家的小兵**都要把敌人推开（否则敌人会叠在客机身上）。
+// 单人局与改动前完全等价（players 只有 P1，循环退化成 for e { for s }）。
 function separateEnemiesFromSquad() {
-  for (const e of enemies) {
-    if (e.dead || e.devStatic) continue;                              // 调试：站桩敌人也不被玩家推开
-    for (const s of soldiers) {
-      const dx = e.x - s.x, dy = e.y - s.y;
-      const minD = e.r + bodyR();
-      const d2 = dx * dx + dy * dy;
-      if (d2 >= minD * minD) continue;
-      const d = Math.sqrt(d2);
-      if (d < 0.001) { e.x = s.x + minD; e.y = s.y; continue; }   // 完全重合：沿 +x 推开
-      e.x = s.x + (dx / d) * minD;
-      e.y = s.y + (dy / d) * minD;
+  for (const p of players) {
+    const arr = soldiersOf(p);
+    if (!arr.length) continue;
+    const br = withCtx(p, () => bodyR());
+    for (const e of enemies) {
+      if (e.dead || e.devStatic) continue;                              // 调试：站桩敌人也不被玩家推开
+      for (const s of arr) {
+        const dx = e.x - s.x, dy = e.y - s.y;
+        const minD = e.r + br;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= minD * minD) continue;
+        const d = Math.sqrt(d2);
+        if (d < 0.001) { e.x = s.x + minD; e.y = s.y; continue; }   // 完全重合：沿 +x 推开
+        e.x = s.x + (dx / d) * minD;
+        e.y = s.y + (dy / d) * minD;
+      }
     }
   }
 }
@@ -3800,6 +3811,11 @@ function saveRun() {
 function restoreRun(s) {
   if (!s || !s.squad || !Array.isArray(s.obstacles)) return false;
   try {
+    // 存档只保存「当前生效玩家」那套上下文（见 snapshotRun），读档一律回到单人槽位 ——
+    // 否则上一局联机残留的双人槽位（players[1] 还是旧对象）会被带进来
+    players = [P1];
+    activePlayer = P1;
+    P1.pendingPick = null;
     squad = s.squad;
     soldiers = s.soldiers || [];
     weapons = s.weapons || [];
@@ -3919,6 +3935,7 @@ function restoreRun(s) {
     obstacles.forEach(o => {
       if (o.type === 'pillar' || o.type === 'tree') { o.hp = Infinity; o.maxHp = Infinity; }
     });
+    captureCtx(activePlayer);   // V1.37：读档直接改写了那些全局，同步一次槽位镜像
     return true;
   } catch (e) {
     return false;
@@ -3936,6 +3953,185 @@ function continueRun() {
   last = performance.now();
   fpsAccum = 0;
   pauseGame();
+}
+
+// 一名玩家开局时的 build 数值（V1.37：抽成函数，双人时 P2 也要一份独立的）。
+// **新增机制字段时这里和 makePlayer 的注释要一起看** —— 每名玩家各持一份，不能共享。
+function defaultStats() {
+  return {
+    moveSpeed: 1, maxHp: 1,
+    bulletDamage: 1, elementalDamage: 1, summonDamage: 1, petDamage: 1,
+    pickupRange: 1, invulnDuration: 0, damageTaken: 1, shieldDamageTaken: 1, dodge: 0, bulletKnockback: 0,
+    burnDamage: 0,
+    statusDuration: 1,
+    vuln: 0, lifesteal: 0, regen: 0, bloodOrb: 0,
+    // 四线专精（V1.33）：默认无加成
+    fireFlat: 0, fireBurnTime: 0,
+    lightningMastery: 0, lightningSplashR: 0, lightningSplashPct: 0,
+    swordFlat: 0, swordHitCdMul: 1,
+    scytheFlat: 0, scytheHitCdMul: 1,
+    // 守护线 / 巨人线 / 协同技（V1.35）
+    guardianShieldAdd: 0, guardianMove: 0, shieldThornsPct: 0, shieldBurstPct: 0, shieldRegenCut: 0,
+    bodyMul: 1,
+    frostfire: false, overload: false, swordLightning: false, swordFire: false, atomicGuard: false,
+  };
+}
+
+// ==================== 双人对战 · 玩家槽位与 build 上下文（V1.37） ====================
+// 单人局只有 players[0]（本机）。联机时房主额外持有 players[1] = 客机的整套状态。
+//
+// **三条硬性约定，改之前先读**：
+//
+// 1) `squad` / `soldiers` / `squadHp` / `squadMaxHp` / `squadRootedT` / `stats` / `weapons` /
+//    `summons` / `pet` / `skills` / `pickCount` / `routePicks` / `appliedIds` / `dmgBonus` /
+//    `dmgBase` / `lightningCdT` / `lightningPending` / `hurtBy` / `lastHurt` / `petRunExp`
+//    这些全局，**始终代表「当前生效的那个玩家」**，不再等于「本机玩家」。
+//    单人局里两者恰好相同，所以老代码照常工作。
+//    （后 5 个是 V1.37 补进来的 —— 它们原本是全局单份，双人下会互相干扰：
+//      客机打出的雷会卡住房主的雷、两人的受伤混进同一份阵亡原因。）
+//
+// 2) 每帧按槽位循环：进入某槽位前把它的字段换进全局，跑完恢复（`switchTo`）。
+//    这样现有 40+ 个「只认全局」的战斗函数一行都不用改 —— 这是这套设计存在的唯一理由。
+//    **单人局 `switchTo(P1)` 是空操作**（`p === activePlayer` 直接返回），因此零开销、零行为变化。
+//
+// 3) **跨帧 / 跨玩家的延迟效果必须带 owner**（飞行中的子弹、延迟落雷、宠物持续技），
+//    命中时用 `withCtx(owner, fn)` 切回主人的上下文再结算。否则 B 打出的子弹会吃 A 的
+//    易伤、给 A 回血，命中触发的火球也会用错人的召唤物 —— 静默算错，极难查。
+//
+// 渲染层不受影响：`render()` 只读全局，本机玩家渲染前把槽位切回自己即可。
+
+let players = [];          // [本机, 客机?]；单人局长度 1。槽位顺序即渲染顺序
+let activePlayer = null;   // 当前全局状态属于谁
+
+// 一名玩家「与别人无关」的全部状态。id：0 = 本机 / 1 = 客机。
+function makePlayer(id) {
+  return {
+    id,
+    name: '',
+    squad: { x: 0, y: 0, shield: 0, shieldMax: 0, shieldRegenTimer: 0, invulnT: 0, invulnCdT: 0, aimAng: -Math.PI / 2 },
+    soldiers: [],
+    hp: 0, hpMax: 0,
+    rootedT: 0,
+    weapons: [], summons: [], pet: null, skills: {},
+    stats: defaultStats(),
+    dmgBonus: 0, dmgBase: 0,
+    pickCount: {}, routePicks: {}, appliedIds: new Set(),
+    // 对局内的「按玩家分」的零散状态（V1.37）：雷电那条线的硬性触发间隔、受伤来源统计、宠物熟练度。
+    // 这些原本是全局单份，双人下会互相干扰（客机打出的雷会卡住房主的雷、两人的受伤混进同一份阵亡原因）。
+    lightningCdT: 0, lightningPending: false,
+    hurtBy: {}, lastHurt: '',
+    petRunExp: 0,
+    // V1.37：本次升级待选的卡（各自选卡用）。**不要塞进网络快照** —— 卡对象里带 apply 闭包，
+    // 序列化不了；客机那边只需要房主抽好的 id + 文案（见 netGuestPick）。
+    pendingPick: null,
+  };
+}
+
+const P1 = makePlayer(0);
+
+// 把当前全局状态存回某个玩家的槽位（引用式，对象身份保持不变 —— `soldier.owner === P1` 因此成立）
+function captureCtx(p) {
+  if (!p) return;
+  p.squad = squad; p.soldiers = soldiers; p.hp = squadHp; p.hpMax = squadMaxHp; p.rootedT = squadRootedT;
+  p.weapons = weapons; p.summons = summons; p.pet = pet; p.skills = skills; p.stats = stats;
+  p.dmgBonus = dmgBonus; p.dmgBase = dmgBase;
+  p.pickCount = pickCount; p.routePicks = routePicks; p.appliedIds = appliedIds;
+  p.lightningCdT = lightningCdT; p.lightningPending = lightningPending;
+  p.hurtBy = hurtBy; p.lastHurt = lastHurt; p.petRunExp = petRunExp;
+}
+
+function loadCtx(p) {
+  squad = p.squad; soldiers = p.soldiers; squadHp = p.hp; squadMaxHp = p.hpMax; squadRootedT = p.rootedT;
+  weapons = p.weapons; summons = p.summons; pet = p.pet; skills = p.skills; stats = p.stats;
+  dmgBonus = p.dmgBonus; dmgBase = p.dmgBase;
+  pickCount = p.pickCount; routePicks = p.routePicks; appliedIds = p.appliedIds;
+  lightningCdT = p.lightningCdT; lightningPending = p.lightningPending;
+  hurtBy = p.hurtBy; lastHurt = p.lastHurt; petRunExp = p.petRunExp;
+}
+
+// 切换「全局代表谁」。已是目标玩家时是空操作（单人局恒为这条路径）。
+function switchTo(p) {
+  if (!p || p === activePlayer) return false;
+  if (activePlayer) captureCtx(activePlayer);
+  loadCtx(p);
+  activePlayer = p;
+  return true;
+}
+
+// 在某个玩家的上下文里执行 fn（跨玩家边界的唯一入口：命中结算、按 owner 扣血等）
+function withCtx(p, fn) {
+  if (!p || p === activePlayer) return fn();
+  const prev = activePlayer;
+  switchTo(p);
+  try { return fn(); } finally { switchTo(prev); }
+}
+
+// 小兵 / 子弹 / 特效上的 owner 是**玩家 id**；这里解析回玩家对象。
+// 解析不到（单人局的旧快照、或该玩家已离场）一律退回 P1，绝不返回 undefined。
+function playerOf(s) { return (s && players[s.owner]) || P1; }
+function idOfActive() { return activePlayer ? activePlayer.id : 0; }
+
+// 取某个玩家的字段。**当前生效玩家的存储就是那些全局变量本身** —— 直接改全局的地方
+// （reset / restoreRun）不会回头同步对象字段，所以对 activePlayer 一律走全局，避免读到陈旧值。
+function soldiersOf(p) { return p === activePlayer ? soldiers : p.soldiers; }
+function squadOf(p) { return p === activePlayer ? squad : p.squad; }
+function hpOf(p) { return p === activePlayer ? squadHp : p.hp; }
+
+// 跨全部玩家找最近的小兵（敌人索敌、范围伤害都从这里进）
+function nearestSoldier(x, y) {
+  let best = null, bd = Infinity;
+  for (const p of players) {
+    for (const s of soldiersOf(p)) {
+      const d = (s.x - x) ** 2 + (s.y - y) ** 2;
+      if (d < bd) { bd = d; best = s; }
+    }
+  }
+  return best;
+}
+
+// 半径内是否有**任意玩家**的小兵（V1.37 双人）：返回第一个命中的，用于扣血与特效定位。
+// 判半径要用**那名玩家自己的**体型（`bodyR()` 读当前上下文的 stats.bodyMul），所以逐个切上下文取。
+// 单人局走快路径，与改动前完全等价。
+function anySoldierIn(x, y, r) {
+  if (players.length <= 1) return soldiers.find(s => Math.hypot(s.x - x, s.y - y) < r + bodyR()) || null;
+  for (const p of players) {
+    const arr = soldiersOf(p);
+    if (!arr.length) continue;
+    const br = withCtx(p, () => bodyR());
+    for (const s of arr) if (Math.hypot(s.x - x, s.y - y) < r + br) return s;
+  }
+  return null;
+}
+
+// 跨全部玩家遍历小兵（站位分离、敌弹命中这类「对每个兵都过一遍」的地方用）
+function forEachSoldierAll(fn) {
+  for (const p of players) {
+    for (const s of soldiersOf(p)) if (fn(s, p) === false) return;
+  }
+}
+
+// 造一名「队友」玩家（槽位 1）。两个入口共用：
+//   · 联机开局时由房主调用（netHostBegin）—— 客机的整套状态就挂在这里；
+//   · 回归台 / 调试里直接调用，用于在不联机的情况下验证「两名玩家各自独立」。
+function coopSpawnLocalAlly() {
+  if (players.length > 1) return players[1];
+  const p2 = makePlayer(1);
+  p2.squad = {
+    x: Math.min(WORLD.w - 40, squad.x + 120), y: squad.y + 70,
+    shield: 0, shieldMax: 0, shieldRegenTimer: 0, invulnT: 0, invulnCdT: 0, aimAng: -Math.PI / 2,
+  };
+  p2.skills = { slow: { owned: false, cd: 0, cdMax: SKILL_DEFS.slow.cd, duration: SKILL_DEFS.slow.duration } };
+  players.push(p2);
+  // 在 P2 自己的上下文里造小兵与武器 —— owner / build 才会落在它身上
+  const prev = activePlayer;
+  switchTo(p2);
+  try {
+    for (let i = 0; i < CFG.soldierCount; i++) addSoldier();
+    addWeapon(meta.equipped.weapon);
+  } finally {
+    switchTo(prev);
+  }
+  return p2;
 }
 
 function reset(seed) {
@@ -3966,23 +4162,7 @@ function reset(seed) {
   obstacles = [];
   vines = [];
   squadRootedT = 0;
-  stats = {
-    moveSpeed: 1, maxHp: 1,
-    bulletDamage: 1, elementalDamage: 1, summonDamage: 1, petDamage: 1,
-    pickupRange: 1, invulnDuration: 0, damageTaken: 1, shieldDamageTaken: 1, dodge: 0, bulletKnockback: 0,
-    burnDamage: 0,
-    statusDuration: 1,
-    vuln: 0, lifesteal: 0, regen: 0, bloodOrb: 0,
-    // 四线专精（V1.33）：默认无加成
-    fireFlat: 0, fireBurnTime: 0,
-    lightningMastery: 0, lightningSplashR: 0, lightningSplashPct: 0,
-    swordFlat: 0, swordHitCdMul: 1,
-    scytheFlat: 0, scytheHitCdMul: 1,
-    // 守护线 / 巨人线 / 协同技（V1.35）
-    guardianShieldAdd: 0, guardianMove: 0, shieldThornsPct: 0, shieldBurstPct: 0, shieldRegenCut: 0,
-    bodyMul: 1,
-    frostfire: false, overload: false, swordLightning: false, swordFire: false, atomicGuard: false,
-  };
+  stats = defaultStats();
   camera = { x: 0, y: 0 };
   bossArena = null;
   wave = 1;
@@ -4011,6 +4191,12 @@ function reset(seed) {
   bombs = [];
   aimMode = 'nearest';     // 目标优先级每局回到默认（V1.31）
   devResetTransient();     // 调试：新对局把「无敌 / 秒杀 / 冻结波次 / 速度」恢复默认，避免带进正常游玩
+
+  // 双人对战（V1.37）：重建玩家槽位。单人局就是 [P1]；联机时由握手流程再补上 P2。
+  // 先把 activePlayer 指到 P1，下面的 addSoldier() / addWeapon() 才知道新兵属于谁。
+  players = [P1];
+  activePlayer = P1;
+  P1.pendingPick = null;    // 新对局不留上一局的待选（P1 是复用对象，会跨局带过来）
 
   // 应用局外装备（V1.31：武器 / 护甲 / 饰品 ×2 的**主属性** + **随机词条**）
   // gearBuff() 已经把「主属性」与「词条」叠进同一份累加器（见 MAIN_STAT_KEYS），这里只是把它写进 stats。
@@ -4097,6 +4283,9 @@ function reset(seed) {
   routePicks = {};
   rerollLeft = 3 + (gearRerollBonus || 0);   // 基础 3 次 + 装备「灵巧」词条
   updateCamera();
+
+  // 开局这一通全局写入之后，把 P1 的槽位同步一次（P1 的存储就是这些全局变量的镜像）
+  captureCtx(P1);
 }
 
 // ==================== 输入 ====================
@@ -4195,22 +4384,35 @@ function updateCamera() {
   camera.y = Math.max(-oy, Math.min(WORLD.h - viewH() + oy, squad.y - viewH() / 2));
 }
 
-function updateSquad(dt) {
-  if (squadRootedT > 0) squadRootedT = Math.max(0, squadRootedT - dt);
-
+// 本机的移动意图（单位向量）。键盘与虚拟摇杆合在一处 —— `updateSquad` 与联机的输入上行共用它，
+// 保证「客机自己按的手感」与「房主看到客机怎么走」完全同源。
+function joyVec() {
   let mx = 0, my = 0;
   if (keys['a'] || keys['arrowleft']) mx -= 1;
   if (keys['d'] || keys['arrowright']) mx += 1;
   if (keys['w'] || keys['arrowup']) my -= 1;
   if (keys['s'] || keys['arrowdown']) my += 1;
-
   // 虚拟摇杆（保留 WASD）
   if (joystick.active && (joystick.dx || joystick.dy)) {
     const jl = Math.hypot(joystick.dx, joystick.dy);
-    if (jl > 8) {
-      mx += joystick.dx / jl;
-      my += joystick.dy / jl;
-    }
+    if (jl > 8) { mx += joystick.dx / jl; my += joystick.dy / jl; }
+  }
+  const l = Math.hypot(mx, my);
+  if (l > 1) { mx /= l; my /= l; }
+  return { x: mx, y: my };
+}
+
+function updateSquad(dt) {
+  if (squadRootedT > 0) squadRootedT = Math.max(0, squadRootedT - dt);
+
+  // 输入（V1.37）：槽位 0 是本机，读键盘 / 摇杆；其余槽位（联机时 = 客机）读 remoteInput，
+  // 那份意图由联机通道下行（见 netOn 的 'in'）。
+  let mx = 0, my = 0;
+  if (!activePlayer || activePlayer.id === 0) {
+    const v = joyVec();
+    mx = v.x; my = v.y;
+  } else {
+    mx = remoteInput.x; my = remoteInput.y;
   }
 
   if (squadRootedT > 0) { mx = 0; my = 0; }   // 被藤蔓缠住时无法移动
@@ -4241,7 +4443,8 @@ function updateSquad(dt) {
   clampToBossArena(squad, 0);                    // 首领战中禁止走出竞技场
   squad.x = Math.max(S.soldierR, Math.min(WORLD.w - S.soldierR, squad.x));
   squad.y = Math.max(S.soldierR, Math.min(WORLD.h - S.soldierR, squad.y));
-  updateCamera();
+  // V1.37：镜头不在这里更新了 —— 双人时这个函数会对两名玩家各跑一遍，而镜头只能跟**本机**，
+  // 所以改成由 update() 在玩家循环之后统一算一次（见 updateCamera 的调用处）。
 }
 
 function updateShield(dt) {
@@ -4315,15 +4518,6 @@ function pickTarget(x, y, maxDist) {
       ? e.maxHp
       : ((AIM_WEIGHT[aimMode] || {})[e.type] || 0) * 1e9 - d2;
     if (score > bestScore) { bestScore = score; best = e; }
-  }
-  return best;
-}
-
-function nearestSoldier(x, y) {
-  let best = null, bd = Infinity;
-  for (const s of soldiers) {
-    const d = (s.x - x) ** 2 + (s.y - y) ** 2;
-    if (d < bd) { bd = d; best = s; }
   }
   return best;
 }
@@ -4596,7 +4790,8 @@ function tryLightning() {
   if (!s) return;
   if (rngCombat() >= lightningChance(s)) return;
   lightningCdT = LIGHTNING_MIN_INTERVAL;
-  pendingLightning.push(LIGHTNING_DELAY);
+  // V1.37：带 owner —— 延迟落雷是在世界相位里结算的，那时全局已经不是这位玩家了
+  pendingLightning.push({ t: LIGHTNING_DELAY, owner: idOfActive() });
 }
 
 function rollLightningOnHit(v) {
@@ -4612,10 +4807,11 @@ function updatePendingLightning(dt) {
   if (lightningCdT <= 0 && lightningPending) tryLightning();   // 窗口结束：用窗口内的命中补一次判定
   if (!pendingLightning.length) return;
   for (let i = pendingLightning.length - 1; i >= 0; i--) {
-    pendingLightning[i] -= dt;
-    if (pendingLightning[i] <= 0) {
+    const it = pendingLightning[i];
+    it.t -= dt;
+    if (it.t <= 0) {
       pendingLightning.splice(i, 1);
-      triggerLightning();
+      withCtx(players[it.owner], () => triggerLightning());   // V1.37：切回落雷主人的上下文再结算
     }
   }
 }
@@ -5133,7 +5329,7 @@ function nearestEnemyExcept(x, y, maxDist, exclude) {
 
 // 落雷视觉：一小段折线闪电
 function petBoltFx(x, y, color) {
-  petFx.push({ kind: 'bolt', x, y, life: 0.2, maxLife: 0.2, color });
+  petFx.push({ kind: 'bolt', x, y, life: 0.2, maxLife: 0.2, color, owner: idOfActive() });
   spawnParticles(x, y, color, 10);
   shake = Math.min(10, shake + 2);
 }
@@ -5389,6 +5585,14 @@ function updatePetFx(dt) {
   if (!petFx.length) return;
   for (let i = petFx.length - 1; i >= 0; i--) {
     const f = petFx[i];
+    // V1.37：特效条目带着主人 id（见 updatePlayerCompanions 的打戳）。这里要读 pet / squad / stats
+    // 来结算持续伤害与减速，必须切回主人的上下文 —— 单人局 f.owner 恒为本机，直接执行。
+    withCtx(players[f.owner], () => petFxStep(f, i, dt));
+  }
+}
+
+// 单个宠物特效条目的一帧（原 updatePetFx 的循环体）
+function petFxStep(f, i, dt) {
     f.life -= dt;
     if (f.onPet) { const pp = petPos(); f.x = pp.x; f.y = pp.y; }   // 宠物技能（喷火）：原点跟着宠物
     else if (f.follow) { f.x = squad.x; f.y = squad.y; }
@@ -5447,7 +5651,6 @@ function updatePetFx(dt) {
       }
       petFx.splice(i, 1);
     }
-  }
 }
 
 // 技能特效绘制（在敌人之下、地面上，所以画在 drawPet 之后、drawEnemies 之前）
@@ -5671,61 +5874,70 @@ function drawPetFx(layer) {
 
 function updateBullets(dt) {
   for (const b of bullets) {
-    // 追踪：冰刺会缓慢修正方向，保证高速移动的敌人也能命中
-    if (b.homing && b.target && !b.target.dead) {
-      const want = Math.atan2(b.target.y - b.y, b.target.x - b.x);
-      const cur = Math.atan2(b.vy, b.vx);
-      let d = want - cur;
-      while (d > Math.PI) d -= Math.PI * 2;
-      while (d < -Math.PI) d += Math.PI * 2;
-      const turn = Math.min(Math.abs(d), b.homing * dt) * Math.sign(d);
-      const sp = Math.hypot(b.vx, b.vy);
-      b.vx = Math.cos(cur + turn) * sp;
-      b.vy = Math.sin(cur + turn) * sp;
-    }
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
+    // V1.37：命中结算要算在**子弹主人**的账上（易伤 / 吸血 / 命中触发的火球都读全局 build），
+    // 所以按 owner 切上下文。同一主人的子弹（单人局即全部）直接走原路径，不额外开销。
+    const ow = players[b.owner];
+    if (ow && ow !== activePlayer) withCtx(ow, () => stepBullet(b, dt));
+    else stepBullet(b, dt);
+  }
+  bullets = bullets.filter(b => !b.dead);
+}
 
-    if (hitObstacle(b)) continue;              // 被木桶 / 箱子 / 石柱挡下
+// 单颗子弹的一帧（原 updateBullets 的循环体，`continue` 改成 `return`）
+function stepBullet(b, dt) {
+  // 追踪：冰刺会缓慢修正方向，保证高速移动的敌人也能命中
+  if (b.homing && b.target && !b.target.dead) {
+    const want = Math.atan2(b.target.y - b.y, b.target.x - b.x);
+    const cur = Math.atan2(b.vy, b.vx);
+    let d = want - cur;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    const turn = Math.min(Math.abs(d), b.homing * dt) * Math.sign(d);
+    const sp = Math.hypot(b.vx, b.vy);
+    b.vx = Math.cos(cur + turn) * sp;
+    b.vy = Math.sin(cur + turn) * sp;
+  }
+  b.x += b.vx * dt;
+  b.y += b.vy * dt;
 
-    for (const e of enemies) {
-      if (e.dead) continue;
-      if (Math.hypot(b.x - e.x, b.y - e.y) < b.r + e.r) {
-        // 同一发子弹不重复命中同一敌人（否则穿透后仍会被同一目标拦下）
-        if (!b.hit) b.hit = new Set();
-        if (b.hit.has(e)) continue;
-        b.hit.add(e);
-        rollLightningOnHit(b.volley);   // 闪电：本轮子弹打到敌人时才判定（每轮一次）
-        const dmg = b.fo ? b.dmg * falloffMul(b) : b.dmg;   // 距离衰减（散弹）
-        const near = b.guard && b.fo && Math.hypot(b.x - b.sx, b.y - b.sy) <= b.fo.near;
-        if (b.pierce > 0) {
-          b.pierce--;                       // 消耗一次穿透，子弹继续飞行
+  if (hitObstacle(b)) return;                // 被木桶 / 箱子 / 石柱挡下
+
+  for (const e of enemies) {
+    if (e.dead) continue;
+    if (Math.hypot(b.x - e.x, b.y - e.y) < b.r + e.r) {
+      // 同一发子弹不重复命中同一敌人（否则穿透后仍会被同一目标拦下）
+      if (!b.hit) b.hit = new Set();
+      if (b.hit.has(e)) continue;
+      b.hit.add(e);
+      rollLightningOnHit(b.volley);   // 闪电：本轮子弹打到敌人时才判定（每轮一次）
+      const dmg = b.fo ? b.dmg * falloffMul(b) : b.dmg;   // 距离衰减（散弹）
+      const near = b.guard && b.fo && Math.hypot(b.x - b.sx, b.y - b.sy) <= b.fo.near;
+      if (b.pierce > 0) {
+        b.pierce--;                       // 消耗一次穿透，子弹继续飞行
+        applyBulletKnockback(e, b);
+        hitEnemy(e, dmg, b.burnDps, b.burnTime);
+        if (!b.petShot) rollEnchants(e);  // 子弹附魔：命中时按概率挂点燃 / 减速
+        if (near && e.dead) closeKillReward();
+        if (b.frost) applyIceHit(b, e);
+        if (e.dead && b.split) tryShotgunSplit(e, b);
+      } else {
+        if (b.aoe > 0) {
+          explode(b);
+        } else {
           applyBulletKnockback(e, b);
           hitEnemy(e, dmg, b.burnDps, b.burnTime);
-          if (!b.petShot) rollEnchants(e);  // 子弹附魔：命中时按概率挂点燃 / 减速
+          if (!b.petShot) rollEnchants(e);
+          if (b.petShot) petOnHit(b, e, dmg);
           if (near && e.dead) closeKillReward();
           if (b.frost) applyIceHit(b, e);
           if (e.dead && b.split) tryShotgunSplit(e, b);
-        } else {
-          if (b.aoe > 0) {
-            explode(b);
-          } else {
-            applyBulletKnockback(e, b);
-            hitEnemy(e, dmg, b.burnDps, b.burnTime);
-            if (!b.petShot) rollEnchants(e);
-            if (b.petShot) petOnHit(b, e, dmg);
-            if (near && e.dead) closeKillReward();
-            if (b.frost) applyIceHit(b, e);
-            if (e.dead && b.split) tryShotgunSplit(e, b);
-          }
-          b.dead = true;
-          break;
         }
+        b.dead = true;
+        break;
       }
     }
-    if (!b.dead && (b.x < -20 || b.x > WORLD.w + 20 || b.y < -20 || b.y > WORLD.h + 20)) b.dead = true;
   }
-  bullets = bullets.filter(b => !b.dead);
+  if (!b.dead && (b.x < -20 || b.x > WORLD.w + 20 || b.y < -20 || b.y > WORLD.h + 20)) b.dead = true;
 }
 
 function applyBulletKnockback(e, b) {
@@ -6119,7 +6331,7 @@ function bomberBlast(x, y, r, dmg, peaceful) {
   sfxExplode();
   spawnBlast(x, y, r * 0.8);
   spawnParticles(x, y, '#ff9d3b', 22);
-  const hit = soldiers.find(s => Math.hypot(s.x - x, s.y - y) < r + bodyR());
+  const hit = anySoldierIn(x, y, r);                     // V1.37：跨两名玩家判定
   if (hit && !peaceful) damageSoldier(hit, dmg, 'aoe');            // 调试：停手的敌人爆炸不掉血
   if (bomberDepth > 0) return;                              // 连锁爆炸只结算一层，避免递归爆炸
   bomberDepth++;
@@ -6260,7 +6472,7 @@ function updateBoss(e, target, dt) {
       // 共享血池：一次位移只结算一次伤害（不随命中人数翻倍）
       if (!e.skillHit) e.skillHit = new Set();
       if (!e.skillHit.has('squad')) {
-        const hit = soldiers.find(s => Math.hypot(s.x - e.x, s.y - e.y) < e.r + bodyR());
+        const hit = anySoldierIn(e.x, e.y, e.r);       // V1.37：跨两名玩家判定
         if (hit) { e.skillHit.add('squad'); damageSoldier(hit, e.dashDamage * difficulty, 'skill'); }
       }
     }
@@ -6471,7 +6683,7 @@ function bossShockwave(e) {
   spawnParticles(e.x, e.y, '#ff9d3b', 16);
   sfxExplode();
   shake = Math.min(10, shake + 3);
-  const hit = soldiers.find(s => Math.hypot(s.x - e.x, s.y - e.y) < BOSS_SHOCK.r + bodyR());
+  const hit = anySoldierIn(e.x, e.y, BOSS_SHOCK.r);      // V1.37：跨两名玩家判定
   if (hit) damageSoldier(hit, BOSS_SHOCK.dmg * difficulty, 'skill');
 }
 
@@ -6899,13 +7111,9 @@ function updateEnemyBullets(dt) {
 
     if (hitObstacle(b)) continue;
 
-    for (const s of soldiers) {
-      if (Math.hypot(b.x - s.x, b.y - s.y) < b.r + bodyR()) {
-        damageSoldier(s, b.dmg, 'shot');
-        b.dead = true;
-        break;
-      }
-    }
+    // V1.37：跨两名玩家判定 —— 打中谁就扣谁的血池
+    const victim = anySoldierIn(b.x, b.y, b.r);
+    if (victim) { damageSoldier(victim, b.dmg, 'shot'); b.dead = true; }
     if (!b.dead && (b.x < -20 || b.x > WORLD.w + 20 || b.y < -20 || b.y > WORLD.h + 20)) b.dead = true;
   }
   enemyBullets = enemyBullets.filter(b => !b.dead);
@@ -6962,6 +7170,11 @@ let hurtBy = {};          // 本局各类来源累计造成的扣血（结算页
 let lastHurt = '';        // 最后一次「扣到血」的来源
 
 function damageSoldier(s, dmg, cause) {
+  if (!s) return;
+  // V1.37：伤害一律记在**这个小兵的主人**头上。敌人 / 敌方子弹是在全局上下文（= 本机玩家）
+  // 里跑的，直接扣会把客机挨的打算到房主身上 —— 所以先切到主人的上下文再走原来的逻辑。
+  const owner = playerOf(s);
+  if (owner !== activePlayer) { withCtx(owner, () => damageSoldier(s, dmg, cause)); return; }
   if (!soldiers.length) return;
   if (squad.invulnT > 0) return;
   if (stats.dodge > 0 && rngCombat() < stats.dodge) {
@@ -7123,9 +7336,7 @@ function collectXp(v) {
   xp += v * xpScale();
   if (xp >= xpToNext) {
     xp -= xpToNext;
-    level++;
-    xpToNext = Math.floor(xpToNext * 1.23 + 6);
-    openUpgrade();
+    beginLevelUp();     // V1.37：升级入口统一走这里（单人局等价于原来的「升级 + 弹面板」）
   }
 }
 
@@ -7316,7 +7527,7 @@ function updateBossDrop(dt) {
   shake = Math.min(18, shake + 12);
   sfxExplode();
   const dmg = BOSS_DROP.dmg * difficulty;
-  const hit = soldiers.find(s => Math.hypot(s.x - d.x, s.y - d.y) < BOSS_DROP.r + bodyR());
+  const hit = anySoldierIn(d.x, d.y, BOSS_DROP.r);       // V1.37：跨两名玩家判定
   if (hit) damageSoldier(hit, dmg, 'aoe');               // 共享血池：只结算一次伤害（首领落地砸击）
   for (const o of enemies.slice()) {              // 先结算场上敌人，再把首领放进场（免得它被自己的落地砸到）
     if (o.dead) continue;
@@ -7405,7 +7616,7 @@ function affixExplode(e) {
   sfxExplode();
   spawnBlast(e.x, e.y, ELITE_BOOM_R * 0.8);
   spawnParticles(e.x, e.y, '#ff9d3b', 18);
-  const hit = soldiers.find(s => Math.hypot(s.x - e.x, s.y - e.y) < ELITE_BOOM_R + bodyR());
+  const hit = anySoldierIn(e.x, e.y, ELITE_BOOM_R);      // V1.37：跨两名玩家判定
   if (hit) damageSoldier(hit, ELITE_BOOM_DMG * difficulty, 'aoe');
 }
 
@@ -7702,11 +7913,14 @@ function stopMusic() {
 
 function spawnDamageNumber(x, y, value, color) {
   damageNumbers.push({ x, y, value: Math.round(value), color, life: 0.8, vy: -55 });
+  // V1.37 双人：房主把打击反馈攒起来，随快照一起下发（客机不跑模拟，否则它看不到任何伤害数字）
+  if (netRole === 'host') netFxQueue.push([r1(x), r1(y), Math.round(value), color, 0]);
 }
 
 // 浮动文字（提示类，如「树怪苏醒！」）
 function spawnFloatText(x, y, text, color) {
   damageNumbers.push({ x, y, text, color, life: 1.4, vy: -40 });
+  if (netRole === 'host') netFxQueue.push([r1(x), r1(y), text, color, 1]);
 }
 
 // 居中横幅提示
@@ -7735,23 +7949,157 @@ function drawJoystick() {
   ctx.beginPath(); ctx.arc(joystick.ox + joystick.dx, joystick.oy + joystick.dy, 20, 0, Math.PI * 2); ctx.fill();
 }
 
-// ==================== 升级 ====================
-function openUpgrade() {
-  upgrades = pickUpgrades(choiceCount);
+// ==================== 升级 · 各自选卡（V1.37 双人） ====================
+// 等级与经验是**共享**的（谁捡到经验都算），但**候选卡各抽各的** —— 用各自那份
+// pickCount / routePicks / appliedIds 建池（见 buildUpgradePool）。世界在**所有人都选完之前**保持冻结。
+//
+// 房主权威：候选由房主替两个人各抽一份；客机那份通过 `pick` 消息发过去（带上 id 与文案，
+// 客机就不必为了显示卡片而重建一套卡池），客机选完回 `pick:choose`，房主在客机的上下文里落地。
+//
+// 单人局：players 只有 P1，流程与改动前完全一致（一条 pendingPick，选完立刻解冻）。
+
+// 本机操控的是哪个槽位：房主 = 0，客机 = 1
+function localPlayer() {
+  if (netRole === 'guest') return players[1] || P1;
+  return players[0] || P1;
+}
+
+// 给某名玩家抽一份候选（在他的上下文里建池，卡池因此属于那一名玩家）
+function rollPickFor(p) {
+  return withCtx(p, () => pickUpgrades(choiceCount));
+}
+
+// 升级入口：给每名玩家各挂一份待选；客机那份发过去，本机那份弹面板
+function beginLevelUp() {
+  level++;
+  xpToNext = Math.floor(xpToNext * 1.23 + 6);
+  // 每名玩家各抽一份候选；抽空了就置 null（**不能用空数组**：空数组是真值，会让「等所有人选完」永远判不成立）
+  players.forEach(p => { const c = rollPickFor(p); p.pendingPick = (c && c.length) ? c : null; });
+  if (!players.some(p => p.pendingPick)) return;      // 全员都没得选：当作没升级，世界不冻结
+  const guest = players.find(p => p.id !== 0);
+  if (guest && guest.pendingPick) {
+    netSend('pick', {
+      level,
+      cards: guest.pendingPick.map(c => ({ id: c.id, name: c.name, desc: c.desc })),
+    });
+  }
+  openLocalPick();
+}
+
+// **候选是同一条数组引用**：面板（upgrades）与待选槽位（pendingPick）必须指向同一份，
+// 否则重掷之后 resolvePick 会拿着旧数组按 id 找不到卡（选了等于没选）。本机候选的赋值一律走这里。
+function setLocalCards(cards) {
+  upgrades = cards;
+  const me = localPlayer();
+  if (me) me.pendingPick = cards;
+  return cards;
+}
+
+// 弹出「本机那一份」候选（单人局就是原来的 openUpgrade）
+function openLocalPick() {
+  const mine = localPlayer();
+  if (!mine || !mine.pendingPick || !mine.pendingPick.length) { renderPickWaiting(); return; }
+  setLocalCards(mine.pendingPick);
   sfxLevelup();
   renderUpgradeCards();
   document.getElementById('upgrade-title').textContent = '选择升级';
-  document.getElementById('btn-reroll').classList.toggle('hidden', rerollLeft <= 0);
+  // 客机不给重掷：rerollLeft 是房主那边的共享计数，客机按了没有意义
+  document.getElementById('btn-reroll').classList.toggle('hidden', rerollLeft <= 0 || netRole === 'guest');
   updateRerollButton();
-  guideAdvance('levelup');     // 首局引导第 3 步：第一次弹出升级面板就算学会了
+  guideAdvance('levelup');
   setState('upgrade');
+}
+
+// 冻结世界、显示「等待队友」：本机已选完，或本机这轮没得选但队友还挂着待选
+function renderPickWaiting() {
+  upgrades = [];
+  const box = document.getElementById('upgrade-cards');
+  if (box) box.innerHTML = '<p class="pick-wait">已选好，等待队友…</p>';
+  document.getElementById('upgrade-title').textContent = '等待队友';
+  document.getElementById('btn-reroll').classList.add('hidden');
+  setState('upgrade');
+}
+
+// 某名玩家选定了某张卡：在他的上下文里落地，然后看是不是所有人都选完了
+function resolvePick(p, id) {
+  if (!p || !p.pendingPick) return;
+  const card = p.pendingPick.find(c => c.id === id);
+  p.pendingPick = null;
+  if (card) withCtx(p, () => applyUpgradeCard(card));
+  // 只要还有人挂着待选，世界继续冻结；本机先选完就先给个「等待队友」的提示
+  if (players.some(q => q.pendingPick)) { if (p === localPlayer()) renderPickWaiting(); return; }
+  finishUpgrade();
+}
+
+// 升级面板收场：回到对局（这次升级若是从暂停里打开的，选完回到暂停）
+function finishUpgrade() {
+  upgrades = [];
+  setState('playing');
+  if (devUpgradeFromPause) { devUpgradeFromPause = false; pauseGame(); }
+}
+
+// 把一张卡落到「当前上下文所属的那名玩家」身上（调用前上下文必须已经切到该玩家）
+function applyUpgradeCard(card) {
+  if (!card) return;
+  card.apply();
+  appliedIds.add(card.id);
+  if (card.route) routePicks[card.route] = (routePicks[card.route] || 0) + 1;   // 累计本路线强化次数（进化门槛）
+  // 结算页的「本局学到的机制」：记下这次选了什么（最多记 4 张，避免列表过长）
+  if (runLearned.filter(t => t.startsWith('升级卡：')).length < 4) learnTag('升级卡：' + card.name);
+  if (card.evo) learnTag('终极进化：' + card.name);
+}
+
+// 面板上点了一张卡 / 按了数字键 / 测试台直接调用
+function applyUpgrade(id) {
+  if (netRole === 'guest') {           // 客机：把选择回给房主，由房主在客机的上下文里落地
+    finishUpgrade();
+    netSend('pick:choose', { id });
+    return;
+  }
+  const me = localPlayer();
+  if (me && me.pendingPick) resolvePick(me, id);   // 没待选就忽略（等队友 / 面板残留的重复点击）
+}
+
+// 客机收到「你该选卡了」：直接把房主抽好的候选摆出来（客机本地没有卡池，也不需要）
+function netGuestPick(p) {
+  const cards = Array.isArray(p.cards) ? p.cards : [];
+  if (!cards.length) return;
+  const box = document.getElementById('upgrade-cards');
+  box.innerHTML = '';
+  const panel = document.querySelector('#upgrade .panel');
+  if (panel) panel.scrollTop = 0;
+  cards.forEach((c, i) => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'card';
+    const name = document.createElement('strong');
+    name.textContent = (i + 1) + '. ' + (c.name || '升级');   // 文案来自房主，一律 textContent
+    const desc = document.createElement('p');
+    desc.className = 'dim';
+    desc.textContent = c.desc || '';
+    el.append(name, desc);
+    el.onclick = () => applyUpgrade(c.id);
+    box.appendChild(el);
+  });
+  setLocalCards(cards.map(c => ({ id: c.id })));
+  sfxLevelup();
+  document.getElementById('upgrade-title').textContent = '选择升级';
+  document.getElementById('btn-reroll').classList.add('hidden');
+  setState('upgrade');
+}
+
+// ==================== 升级 ====================
+// 只给「本机」抽一份并弹面板（测试台 / 开发者工具用）；正式流程走 beginLevelUp，会给每名玩家各抽一份
+function openUpgrade() {
+  setLocalCards(rollPickFor(localPlayer()));
+  openLocalPick();
 }
 
 // 重掷：重新抽一次当前升级选项（每局 3 次，击败 Boss +1）
 function rerollUpgrades() {
   if (rerollLeft <= 0) return;
   rerollLeft--;
-  upgrades = pickUpgrades(choiceCount);
+  setLocalCards(pickUpgrades(choiceCount));   // 候选换了数组，待选槽位要跟着换（见 setLocalCards）
   renderUpgradeCards();
   updateRerollButton();
   sfxPickup();
@@ -7802,24 +8150,6 @@ function renderUpgradeCards() {
     el.onclick = () => applyUpgrade(u.id);
     box.appendChild(el);
   });
-}
-
-function applyUpgrade(id) {
-  const u = upgrades.find(x => x.id === id);
-  if (u) {
-    u.apply();
-    appliedIds.add(u.id);
-    if (u.route) routePicks[u.route] = (routePicks[u.route] || 0) + 1;   // 累计本路线强化次数（进化门槛）
-    // 结算页的「本局学到的机制」：记下这次选了什么（最多记 4 张，避免列表过长）
-    if (runLearned.filter(t => t.startsWith('升级卡：')).length < 4) learnTag('升级卡：' + u.name);
-    if (u.evo) learnTag('终极进化：' + u.name);
-  }
-  setState('playing');     // 收起升级面板
-  // 调试「暂停中也能升级」：这次升级是从暂停里打开的，选完卡回到暂停
-  if (devUpgradeFromPause) {
-    devUpgradeFromPause = false;
-    pauseGame();
-  }
 }
 
 // Boss 奖励：候选全部来自首领专属奖励池（不混入普通升级卡），且只选 1 项
@@ -8558,7 +8888,7 @@ function drawVines() {
     }
   });
 }
-function drawSoldiers() {
+function drawSoldiers(nameOverride) {
   const r = charRadius();
   // 朝向与 updateWeapons 同一口径：只瞄**武器射程内**真正会开火的目标；
   // 射程内没敌人就退回 squad.aimAng（移动方向 / 上一帧朝向），不再死盯打不到的优先目标。
@@ -8585,18 +8915,31 @@ function drawSoldiers() {
     drawBar(s.x, s.y - r - 20, 26, 4, squadMaxHp > 0 ? squadHp / squadMaxHp : 0, '#6f6');
   });
 
-  // 局内显示玩家名称
+  // 局内显示玩家名称（双人时由调用方传对方的名字，见 drawAllPlayers）
   if (soldiers.length) {
+    const nm = nameOverride || playerName();
     const s = soldiers[0];
     const ny = s.y - r - 30;
     ctx.textAlign = 'center';
     ctx.font = 'bold 11px sans-serif';
     ctx.lineWidth = 3;
     ctx.strokeStyle = 'rgba(0,0,0,0.7)';
-    ctx.strokeText(playerName(), s.x, ny);
+    ctx.strokeText(nm, s.x, ny);
     ctx.fillStyle = '#9fe0ff';
-    ctx.fillText(playerName(), s.x, ny);
+    ctx.fillText(nm, s.x, ny);
     ctx.lineWidth = 1;
+  }
+}
+
+// 画全部玩家（V1.37）：单人局就是原来的 drawSoldiers()；
+// 双人时逐个切槽位画 —— 每名玩家的手持武器、护盾、血条都取他自己那份 build。
+function drawAllPlayers() {
+  if (players.length <= 1) { drawSoldiers(); return; }
+  const prev = activePlayer;
+  for (const p of players) {
+    switchTo(p);
+    drawSoldiers(p.name || undefined);
+    switchTo(prev);
   }
 }
 
@@ -9858,7 +10201,7 @@ function render() {
   drawPetFx('ground');            // 宠物技能的地面层：熔岩池 / 领域 / 漩涡 / 新星…（压在单位下方）
   drawBombs();                    // 自爆怪的引信预警圈（V1.31）
   drawBossDropRing();             // 首王落点预警圈（V1.31）
-  drawSoldiers();
+  drawAllPlayers();   // V1.37：双人时两名玩家都画（各自的手持武器 / 护盾 / 血条）
   drawVines();
   drawSummons();
   drawPet();
@@ -9906,20 +10249,62 @@ let fpsAccum = 0;
 const RESUME_COUNTDOWN = 3;
 let resumeT = 0;
 
+// 给「这一段里新产生的」子弹盖上归属戳。
+// 依赖：`bullets` 是**世界级**数组（不属于任何玩家），且只有在 updateBullets 里才会被过滤掉，
+// 所以在本函数同步执行期间，数组只会追加 —— 按长度差打戳是可靠的。
+function stampNewBullets(p, from) {
+  for (let i = from; i < bullets.length; i++) bullets[i].owner = p.id;
+}
+
+// 玩家侧相位一（V1.37）：小队移动、护盾、主动技能、开火 —— 全程跑在「这个玩家」的全局上下文里
+function updatePlayerCombat(p, dt) {
+  const prev = activePlayer;
+  switchTo(p);
+  const bulletFrom = bullets.length;
+  try {
+    updateSquad(dt);
+    updateSoldiers(dt);
+    updateShield(dt);
+    if (stats.regen > 0) healSquad(stats.regen * dt);   // 回血宝珠：每秒回血
+    updateSkills(dt);
+    updateWeapons(dt);
+  } finally {
+    stampNewBullets(p, bulletFrom);
+    switchTo(prev);
+  }
+}
+
+// 玩家侧相位二（V1.37）：召唤物与宠物。刻意放在「延迟落雷」之后 ——
+// 单人局的执行顺序是 weapons → pendingLightning → summons → pet，拆两个相位才能保持一致。
+function updatePlayerCompanions(p, dt) {
+  const prev = activePlayer;
+  switchTo(p);
+  const bulletFrom = bullets.length;
+  const fxFrom = petFx.length;
+  try {
+    updateSummons(dt);
+    updatePet(dt);
+  } finally {
+    stampNewBullets(p, bulletFrom);
+    // 宠物持续技（喷火 / 熔岩 / 领域…）会在之后的世界相位里逐帧结算伤害，
+    // 所以条目本身要记住是谁的 —— 见 updatePetFx 里的 withCtx。
+    for (let i = fxFrom; i < petFx.length; i++) petFx[i].owner = p.id;
+    switchTo(prev);
+  }
+}
+
 function update(dt) {
   if (!isLive()) return;                 // 非对局状态（菜单 / 暂停 / 升级 / 首领奖励 / 商人 / 结算）世界一律静止
+  // V1.37 客机：**不跑模拟** —— 世界完全由房主的快照驱动，这里只把快照贴回全局
+  if (netRole === 'guest') { netGuestTick(); return; }
   if (resumeT > 0) { resumeT = Math.max(0, resumeT - dt); return; }   // 读秒期间世界静止
   if (devInvuln) squad.invulnT = Math.max(squad.invulnT, 0.2);   // 调试：无敌（复用受伤免疫）
   gameTime += dt;
-  updateSquad(dt);
-  updateSoldiers(dt);
-  updateShield(dt);
-  if (stats.regen > 0) healSquad(stats.regen * dt);   // 回血宝珠：每秒回血
-  updateSkills(dt);
-  updateWeapons(dt);
+  // 玩家侧（V1.37）：单人局这里只循环一次，与改动前完全等价；双人时每名玩家各跑一遍自己的 build。
+  for (const p of players) updatePlayerCombat(p, dt);
+  updateCamera();               // 镜头只跟本机玩家（玩家循环结束后全局已切回本机）
   updatePendingLightning(dt);   // 延迟落雷
-  updateSummons(dt);
-  updatePet(dt);
+  for (const p of players) updatePlayerCompanions(p, dt);
   updatePetFx(dt);
   updateBullets(dt);
   updateEnemies(dt);
@@ -9940,7 +10325,8 @@ function update(dt) {
   updateDamageNumbers(dt);
   if (banner.t > 0) banner.t -= dt;
   shake = Math.max(0, shake - dt * 50);
-  if (soldiers.length === 0) gameOver();
+  // V1.37：双人时**两人都倒**才结算；单人局等价于原来的 soldiers.length === 0
+  if (!players.some(p => p.soldiers.length)) gameOver();
 }
 
 // 把 rAF 的原始帧间隔（毫秒）换算成逻辑 dt（秒），钳到 [0, 0.05]（V1.35 修正）：
@@ -9973,6 +10359,7 @@ function loop(now) {
   // 贯穿命中顿帧：极短地冻结逻辑（渲染照常），强化打击感
   if (hitStop > 0) hitStop = Math.max(0, hitStop - dt);
   else update(dt * devSpeed);          // 调试：devSpeed 为游戏速度倍率（默认 1，不改变正常玩法）
+  if (netRole === 'guest' && isLive()) netSendInput();   // V1.37 客机：把移动意图上行给房主（非对局态不必发）
   render();
   devTickHud(raw / 1000);              // 调试面板：刷新读数 / 信息浮层 / 入口按钮显隐
 
@@ -10230,43 +10617,72 @@ function gameOver(won) {
     petText = ` · 宠物熟练度 +${Math.round(petRunExp)}` + (up > 0 ? `（${PET_DEFS[id].name} 升到 Lv.${d.lv}）` : '');
   }
   saveMeta();
+  renderGameOverPanel({ win, wave, kills, level, time: gameTime, coins: Math.round(runCoins), petText, causeKey: lastHurt });
+  setState('gameover');     // 数字填好后再切状态，避免闪一下空结算面板
+  // 双人（V1.37）：把结果下发给客机 —— 客机不跑模拟，没有这一步它只会停在冻结的战场上。
+  // **账号结算只在房主这一侧做**（金币 / 成绩 / 宠物熟练度都是房主那份数据）。
+  if (netRole === 'host') {
+    const foe = players[1];
+    netSend('run:end', {
+      won: win, wave: cleared, kills, level, time: gameTime, coins: Math.round(runCoins),
+      cause: lastHurt || '',                     // 房主自己的阵亡原因
+      peerCause: (foe && foe.lastHurt) || '',    // 客机自己的（扣血按 owner 记在各人账上，见 damageSoldier）
+    });
+  }
+}
+
+// 结算页的统一渲染（房主侧传实测数据；客机侧用房主下发的数据，`fromNet: true`）
+//   阵亡原因：房主侧取最后一次扣到血的来源（`lastHurt`）；若本局重开过 / 读档续玩导致统计为空，就说「力竭而亡」。
+//   学到的机制：本局实际触发过的系统（移动 / 拾取 / 升级卡 / 首领奖励…），最多列 6 条 —— 这份统计只有房主侧有。
+//   联机局的两处差异：金币与成绩由房主那侧结算（客机不重复结算）；出口只留「回到大厅」（「再来一局」要房主在房间里重新开局）。
+function renderGameOverPanel(res) {
+  const win = !!res.win;
+  const net = !!netRole;
   document.getElementById('go-eyebrow').textContent = win ? 'MISSION COMPLETE' : 'ADVENTURE PAUSED';
   document.getElementById('go-title').textContent = win ? '通关！' : '冒险暂告一段落';
   document.getElementById('go-stats').textContent =
-    `波次 ${wave} · 击杀 ${kills} · 等级 ${level} · 时长 ${fmtTime(gameTime)}${petText}`
+    `波次 ${res.wave} · 击杀 ${res.kills} · 等级 ${res.level} · 时长 ${fmtTime(res.time)}${res.petText || ''}`
     + (win ? `（标准模式 ${STANDARD_WAVES} 波全清，无尽模式已开放）` : '');
-  document.getElementById('go-coins').textContent = Math.round(runCoins);
-  renderGameOverExtras(win);
-  setState('gameover');     // 数字填好后再切状态，避免闪一下空结算面板
-}
-
-// 结算页的「阵亡原因」+「本局学到的机制」（V1.35 第二阶段需求 5 / 6）
-//   阵亡原因：取最后一次扣到血的来源；若本局重开过 / 读档续玩导致统计为空，就说「力竭而亡」。
-//   学到的机制：本局实际触发过的系统（移动 / 拾取 / 升级卡 / 首领奖励…），最多列 6 条。
-function renderGameOverExtras(win) {
   const causeEl = document.getElementById('go-cause');
-  if (causeEl) {
-    if (win) {
-      causeEl.textContent = '';
-      causeEl.classList.add('hidden');
-    } else {
-      causeEl.classList.remove('hidden');
-      const label = (HURT_CAUSES[lastHurt] || {}).kill || '力竭而亡';
-      // 再把「扣血最多」的那一类附上，避免玩家只看到致死一击、看不到主要压力来源
-      const top = Object.entries(hurtBy).sort((a, b) => b[1] - a[1])[0];
-      const extra = (top && top[0] !== lastHurt && HURT_CAUSES[top[0]])
-        ? ` · 本局掉血主要来自 ${HURT_CAUSES[top[0]].from}`
-        : '';
-      causeEl.textContent = `阵亡原因：${label}${extra}`;
-    }
+  if (win) {
+    causeEl.textContent = '';
+    causeEl.classList.add('hidden');
+  } else {
+    causeEl.classList.remove('hidden');
+    const label = (HURT_CAUSES[res.causeKey] || {}).kill || '力竭而亡';
+    // 再把「扣血最多」的那一类附上，避免玩家只看到致死一击、看不到主要压力来源（客机没有这份统计）
+    const top = Object.entries(hurtBy).sort((a, b) => b[1] - a[1])[0];
+    const extra = (!res.fromNet && top && top[0] !== res.causeKey && HURT_CAUSES[top[0]])
+      ? ` · 本局掉血主要来自 ${HURT_CAUSES[top[0]].from}`
+      : '';
+    causeEl.textContent = `阵亡原因：${label}${extra}`;
   }
   const box = document.getElementById('go-learned');
-  if (!box) return;
-  if (!runLearned.length) { box.innerHTML = ''; box.classList.add('hidden'); return; }
-  box.classList.remove('hidden');
-  const list = runLearned.slice(0, 6).map(t => `<li>${t}</li>`).join('');
-  const more = runLearned.length > 6 ? `<p class="dim">还有 ${runLearned.length - 6} 条机制在下一局里等你发现</p>` : '';
-  box.innerHTML = `<div class="go-learned-title">本局学到的机制</div><ul class="go-learned-list">${list}</ul>${more}`;
+  const learned = res.fromNet ? [] : runLearned;
+  if (!learned.length) {
+    box.innerHTML = '';
+    box.classList.add('hidden');
+  } else {
+    box.classList.remove('hidden');
+    const list = learned.slice(0, 6).map(t => `<li>${t}</li>`).join('');
+    const more = learned.length > 6 ? `<p class="dim">还有 ${learned.length - 6} 条机制在下一局里等你发现</p>` : '';
+    box.innerHTML = `<div class="go-learned-title">本局学到的机制</div><ul class="go-learned-list">${list}</ul>${more}`;
+  }
+  const coinsLine = document.getElementById('go-coins-line');
+  if (coinsLine) {
+    if (res.fromNet) coinsLine.textContent = '联机局：本局金币与成绩由房主那一侧结算';
+    else coinsLine.innerHTML = `本局获得金币：<span id="go-coins">${Math.round(res.coins)}</span>`;
+  }
+  const restart = document.getElementById('btn-restart');
+  const change = document.getElementById('btn-change');
+  if (net) {
+    restart.textContent = '回到大厅';
+    change.classList.add('hidden');
+  } else {
+    restart.textContent = '再来一局';
+    change.textContent = '返回主菜单';
+    change.classList.remove('hidden');
+  }
 }
 
 // ==================== 主菜单 ====================
@@ -11610,6 +12026,7 @@ function coopCreate() {
     .then(d => {
       applyRoom(d.room);
       coopStatusSet(`房间已创建，把房间码 ${d.room.code} 发给好友，或点「复制邀请」发链接`);
+      netConnect(d.room.code, 'host');   // 提前把联机通道接好，开局时才发得出去
     })
     .catch(err => coopFail(err, '生成房间码失败'));
 }
@@ -11623,7 +12040,9 @@ function coopJoin(code) {
     .then(d => {
       applyRoom(d.room);
       coopInvites = coopInvites.filter(i => i.code !== c);
-      coopStatusSet('已加入房间，等房主准备好');
+      coopStatusSet('已加入房间，等房主开局');
+      // 客机也要自己接通道 —— 房主的 run:start 是靠广播发的，没连上就永远收不到
+      netConnect(c, 'guest');
     })
     .catch(err => coopFail(err, '加入失败'));
 }
@@ -11634,7 +12053,7 @@ function coopLeave() {
   const host = coopRoom.host === currentUser;
   coopStatusSet('正在离开房间…');
   roomsApi('POST', { action: 'leave', code })
-    .then(() => { applyRoom(null); coopStatusSet(host ? '已解散房间' : '已离开房间'); })
+    .then(() => { netClose(); applyRoom(null); coopStatusSet(host ? '已解散房间' : '已离开房间'); })
     .catch(err => coopFail(err, '离开失败'));
 }
 
@@ -11745,6 +12164,16 @@ function renderCoop() {
     readyBtn.disabled = !inRoom;
   }
 
+  // 「开始双人对战」（V1.37）：只有房主、且好友已进房时才点得动
+  const fightBtn = document.getElementById('coop-fight');
+  if (fightBtn) {
+    const isHost = inRoom && coopRoom.host === currentUser;
+    const canFight = isHost && !!coopRoom.guest;
+    fightBtn.disabled = !canFight;
+    fightBtn.textContent = !inRoom ? '等好友进房'
+      : (isHost ? (coopRoom.guest ? '开始双人对战' : '等好友进房') : '等房主开局');
+  }
+
   const invBox = document.getElementById('coop-invites');
   if (invBox) {
     invBox.innerHTML = '';
@@ -11819,6 +12248,407 @@ function coopHandleUrl() {
   return true;
 }
 
+// ==================== 双人对战 · 联机内核（V1.37） ====================
+// 传输：Supabase Realtime 的 **public broadcast 频道** `room:<房间码>`，协议按 Phoenix 裸 WebSocket 手写
+//   （与排行榜那个订阅同一套写法）。实测两个客户端 join 同一频道能互相收到 broadcast，
+//   且 **public 频道不走 realtime.messages 的授权策略，因此不需要任何 DB 迁移**。
+//
+// 权威模型：**房主权威**
+//   · 房主：跑完整模拟 —— 槽位 0 = 自己，槽位 1 = 客机；按固定频率广播世界快照，并接收客机的输入意图。
+//   · 客机：**不跑 update()**，只上行输入、按快照回放渲染（渲染层只读世界，所以能直接复用 render()）。
+//
+// 消息（都是 broadcast，除 phx_join / heartbeat 外）：
+//   run:start { seed, mode, host, guest }  房主开局。**只带种子与模式**，世界各自 reset(seed) 生成 ——
+//              把 obstacles / vines / decorations 塞进来体积能到上百 KB，broadcast 会静默丢弃
+//   run:go    {}                           客机就位，房主可以开始喂快照了
+//   in        { x, y }                     客机 -> 房主：移动意图（单位向量，值变了才发）
+//   snap      {...}                        房主 -> 客机：世界快照（约 18Hz）
+//   fx        { shake, f }                 房主 -> 客机：打击反馈（伤害数字 / 浮动文字 / 震屏，纯表现、可丢）
+//   pick      { level, cards }             房主 -> 客机：这一轮给客机抽到的候选（id + 文案）
+//   pick:choose { id }                     客机 -> 房主：我选了哪张（由房主落地）
+//   run:end   { won, wave, kills, level, time, coins, cause, peerCause }  房主 -> 客机：这一局的结果
+//             （客机据此摆结算页；cause = 房主自己的阵亡原因，peerCause = 客机自己的）
+//   run:end   { left: true }               任一方 -> 对方：我中途收场了（对方退回大厅）
+// **通道的存活周期是「在房间里」，不是「这一局」**：一局结束后两边都还在房间，房主重新开局即可再打一局。
+let netSocket = null;
+let netTopic = '';
+let netJoined = false;
+let netRef = 1;
+let netHbTimer = null;
+let netJoinTimer = null;
+let netRole = null;             // 'host' | 'guest'
+let netPeer = '';
+let netInfo = null;             // 后端下发的 Realtime 连接信息
+let netStatusText = '';
+let netSnap = null;             // 客机：最近一次快照（渲染目标）
+let netSnapAt = 0;
+let netSnapTimer = null;
+let remoteInput = { x: 0, y: 0 };   // 房主：客机的移动意图
+let netFxQueue = [];                // 房主：待下发的打击反馈（伤害数字 / 浮动文字）
+const NET_HB_MS = 25000;
+const NET_JOIN_TIMEOUT = 9000;
+const NET_SNAP_MS = 55;             // 约 18Hz：世界快照 + 打击反馈都挂在这个节拍上
+const NET_FX_MAX = 12;              // 一次最多带多少条反馈（纯表现，超出的直接丢，不值得为它排队）
+
+function netStatus(msg) {
+  netStatusText = msg;
+  const el = document.getElementById('coop-status');
+  if (el && friendsOpen) el.textContent = msg;
+}
+
+// 拉 Realtime 连接信息（同一个接口排行榜也在用，这里只取 realtime 字段）
+function netFetchInfo() {
+  if (netInfo) return Promise.resolve(netInfo);
+  return fetch('/api/leaderboard?limit=1')
+    .then(r => (r.ok ? r.json() : {}))
+    .then(d => { netInfo = d.realtime || null; return netInfo; })
+    .catch(() => null);
+}
+
+function netSendRaw(event, payload, join) {
+  if (!netSocket || netSocket.readyState !== 1) return false;
+  const msg = { topic: netTopic, event, payload, ref: String(netRef++) };
+  if (join) msg.join_ref = '1';
+  netSocket.send(JSON.stringify(msg));
+  return true;
+}
+
+// 广播一条业务消息（对方通过 netOn 收到）
+function netSend(event, payload) {
+  return netSendRaw('broadcast', { type: 'broadcast', event, payload: payload || {} });
+}
+
+function netClose(reason) {
+  if (netHbTimer) { clearInterval(netHbTimer); netHbTimer = null; }
+  if (netJoinTimer) { clearTimeout(netJoinTimer); netJoinTimer = null; }
+  if (netSnapTimer) { clearInterval(netSnapTimer); netSnapTimer = null; }
+  if (netSocket) {
+    const s = netSocket;
+    netSocket = null;
+    s.onopen = s.onmessage = s.onerror = s.onclose = null;
+    try { s.close(); } catch (e) {}
+  }
+  const wasJoined = netJoined;
+  netJoined = false;
+  netRole = null;
+  netSnap = null;
+  if (reason && wasJoined) netStatus(reason);
+  else if (wasJoined) netStatus('联机已结束');
+}
+
+// 断线 / 收场：关掉通道，双方都退回房间大厅（房间还在，能再来一局）
+function netAbort(reason) {
+  const inMatch = players.length > 1 || (state === 'playing' && netRole);
+  netClose(reason || '联机已断开');
+  if (!inMatch) return;
+  netBackToLobby(true);        // 断线时保留结算页：这一局已经结束，没必要把结算数据收走
+}
+
+// 退回房间大厅（**不关通道** —— 通道的存活周期是「在房间里」，不是「这一局」：
+//   这一局结束后双方都还在房间，房主点「开始双人对战」就能直接再来一局，不必重新进房）。
+// 单人的暂停 / 结算态也要能退：把槽位还原成单人，免得残留的双人槽位被后面的单人局带进去。
+// keepResult = true 时结算页保持不动（队友断线不该把正在看的结算数据收走）。
+function netBackToLobby(keepResult) {
+  if (netSnapTimer) { clearInterval(netSnapTimer); netSnapTimer = null; }
+  players = [P1];
+  activePlayer = null;
+  switchTo(P1);
+  P1.id = 0;                   // 客机那条会把 P1 的 id 改成 1（自己才是槽位 1），退回单人时归一
+  P1.pendingPick = null;
+  if (state !== 'menu' && !(keepResult && state === 'gameover')) { renderMenu(); showMenu(); }
+  renderCoop();
+}
+
+// 我方主动收场（暂停里「返回主菜单 / 新游戏」、结算页的「回到大厅」）：先告诉对方再退
+function netLeaveMatch() {
+  // 结算页离开不用再通知：这一局的结果（run:end 结果广播）早就发过了
+  if (netRole && state !== 'gameover') netSend('run:end', { left: true });
+  netBackToLobby();
+}
+
+// 建立频道连接。role ∈ 'host' | 'guest'
+// **resolve 的时机是 `phx_join` 被服务端确认之后，不是 WebSocket 刚连上** ——
+// 早于确认就发广播会被服务端直接丢掉（实测：房主的 run:start 就是这么丢的），
+// 这是个很容易踩的坑，改这里务必保留「等 join 确认」这一条。
+function netConnect(code, role) {
+  const topic = `realtime:room:${code}`;
+  if (netJoined && netSocket && netTopic === topic && netRole === role) return Promise.resolve(true);
+  netClose();
+  if (!code || !coopAvailable()) return Promise.resolve(false);
+  return netFetchInfo().then(rt => new Promise(resolve => {
+    if (!rt || typeof WebSocket !== 'function') {
+      netStatus('联机通道不可用（缺 Realtime 配置）');
+      resolve(false);
+      return;
+    }
+    netRole = role;
+    netTopic = topic;
+    let settled = false;
+    const finish = ok => { if (!settled) { settled = true; resolve(ok); } };
+    const ws = new WebSocket(`${rt.url}?apikey=${encodeURIComponent(rt.key)}&vsn=1.0.0`);
+    netSocket = ws;
+
+    ws.onopen = () => {
+      if (netSocket !== ws) return;
+      netSendRaw('phx_join', { config: { broadcast: { self: false } } }, true);
+      netHbTimer = setInterval(() => {
+        if (netSocket === ws) netSocket.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: 'hb' }));
+      }, NET_HB_MS);
+      netJoinTimer = setTimeout(() => {
+        if (netSocket === ws && !netJoined) { netAbort('联机通道未响应（可能是网络或 Realtime 配置问题）'); finish(false); }
+      }, NET_JOIN_TIMEOUT);
+    };
+
+    ws.onmessage = ev => {
+      if (netSocket !== ws) return;
+      let m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.event === 'phx_reply') {
+        if (m.ref === '1') {
+          netJoined = !!(m.payload && m.payload.status === 'ok');
+          if (netJoinTimer) { clearTimeout(netJoinTimer); netJoinTimer = null; }
+          if (!netJoined) netAbort('联机频道加入失败');
+          finish(netJoined);
+        }
+        return;
+      }
+      if (m.event === 'phx_error' || m.event === 'phx_close') { netAbort('联机连接被关闭'); finish(false); return; }
+      if (m.event !== 'broadcast') return;
+      const p = m.payload || {};
+      netOn(p.event, p.payload || {});
+    };
+
+    ws.onerror = () => { if (netSocket === ws) { netAbort('联机连接出错'); finish(false); } };
+    ws.onclose = () => { if (netSocket === ws) { netAbort('联机连接已断开'); finish(false); } };
+  }));
+}
+
+// 收到对方消息
+function netOn(event, p) {
+  if (event === 'run:start') { netGuestBegin(p); return; }
+  if (event === 'run:go') { if (netRole === 'host') netStartSnapshots(); return; }
+  if (event === 'in') { remoteInput.x = Number(p.x) || 0; remoteInput.y = Number(p.y) || 0; return; }
+  if (event === 'snap') { netSnap = p; netSnapAt = performance.now(); return; }
+  if (event === 'fx') { netGuestFx(p); return; }   // 打击反馈（纯表现）
+  // 各自选卡（V1.37）：房主把给客机抽好的候选发过来 / 客机把选择回给房主
+  if (event === 'pick') { netGuestPick(p); return; }
+  if (event === 'pick:choose') { resolvePick(players[1], p.id); return; }
+  if (event === 'run:end') { netOnEnd(p); return; }
+}
+
+// 「这一局结束了」两类消息共用一个事件名：
+//   · 房主 → 客机：**结果广播**（带 won / wave / kills / level / time / coins / cause）→ 客机摆出结算页
+//   · 任一方 → 对方：**中途收场**（`left: true`）→ 对方退回大厅
+// 注意这里**都不关通道** —— 通道跟着「在房间里」走（见 netBackToLobby），所以随时能再来一局。
+function netOnEnd(p) {
+  const left = !p || !!p.left;
+  if (netRole === 'host') {
+    // 客机提前收场：房主也回大厅（已在结算页就只提示，不打断他看结算）
+    if (left) {
+      coopStatusSet(`${netPeer || '队友'} 结束了这一局`);
+      if (state !== 'gameover') netBackToLobby(true);
+    }
+    return;
+  }
+  if (left) {
+    coopStatusSet(`${netPeer || '房主'} 结束了这一局`);
+    netBackToLobby(true);
+    return;
+  }
+  // 客机侧：房主下发的这一局结果 —— 客机自己的模拟没跑过，所以数字全用房主那份；
+  // 阵亡原因优先用「客机自己那一份」（房主替它记着，扣血按 owner 分账）
+  renderGameOverPanel({
+    win: !!p.won, wave: Number(p.wave) || 0, kills: Number(p.kills) || 0, level: Number(p.level) || 0,
+    time: Number(p.time) || 0, coins: Number(p.coins) || 0, causeKey: p.peerCause || p.cause || '', fromNet: true,
+  });
+  setState('gameover');
+  coopStatusSet(`这一局结束了（房主 ${netPeer} 结算）`);
+}
+
+// ==================== 房主侧 ====================
+
+// 开局演出：生成世界 -> 建客机槽位 -> 广播 run:start
+function netHostBegin() {
+  if (!coopRoom || coopRoom.host !== currentUser) return;
+  if (!coopRoom.guest) { coopStatusSet('等好友进房才能开局'); return; }
+  netPeer = coopRoom.guest;
+  const code = coopRoom.code;
+  coopStatusSet('正在建立联机通道…');
+  startGame();                                  // 房主先按正常流程开一局（世界在这里生成）
+  const seed = runSeed, mode = runMode;
+  coopSpawnLocalAlly();                         // 槽位 1 = 客机
+  players[1].name = netPeer;
+  players[0].name = currentUser;
+  netConnect(code, 'host').then(ok => {
+    if (!ok) return;
+    setState('playing');
+    closeFriends();                             // 开局后收起好友 / 房间面板，别盖住战场
+    // **开局消息只带种子，不带整张世界** —— 把 obstacles / vines / decorations 塞进去体积能到上百 KB，
+    // Supabase 的 broadcast 会直接丢弃超限消息（实测：收不到、也不报错，非常难查）。
+    // 两边各自 reset(seed) 即可得到同一张地图：世界的生成只走 rngWorld，与账号的装备 / 外观无关。
+    const sent = netSend('run:start', { seed, mode, host: currentUser, guest: netPeer });
+    netStartSnapshots();
+    coopStatusSet(sent
+      ? `对局开始：${currentUser} vs 关卡（队友 ${netPeer}）`
+      : '开局广播发送失败（联机通道可能已断开）');
+  });
+}
+
+// 房主按固定频率把世界快照广播给客机（顺带把这一拍的打击反馈带上）
+function netStartSnapshots() {
+  if (netSnapTimer) clearInterval(netSnapTimer);
+  netFxQueue.length = 0;      // 新的一局：别把上一局没发完的反馈带过来
+  netSnapTimer = setInterval(() => {
+    if (!netJoined || !isLive()) return;
+    netSend('snap', netSnapshot());
+    netSendFx();
+  }, NET_SNAP_MS);
+}
+
+// 打击反馈：伤害数字 / 浮动文字 / 屏幕抖动。**纯表现** —— 丢了不影响判定，所以不重发、不排队。
+//   客机不跑模拟，这些数据在它那边永远不会产生，没有这一条它打怪就是「怪默默掉血」。
+function netSendFx() {
+  const f = netFxQueue.splice(0, NET_FX_MAX);
+  netFxQueue.length = 0;                       // 超出的直接丢
+  const s = Math.round(shake * 10) / 10;
+  if (!f.length && s < 0.5) return;            // 没有反馈也没有震动：不发
+  netSend('fx', { shake: s, f });
+}
+
+// 客机：把房主下发的打击反馈摆到自己的表现层上（伤害数字 / 浮动文字 / 震屏）。
+//   写的是 damageNumbers / shake —— 这两个本来就是渲染层自己的数据（render() 里自行推进），
+//   所以客机「灌进去 → render()」与它回放世界是同一套做法。
+function netGuestFx(p) {
+  const list = Array.isArray(p && p.f) ? p.f : [];
+  for (const a of list) {
+    if (!a || a.length < 5) continue;
+    if (a[4]) damageNumbers.push({ x: a[0], y: a[1], text: a[2], color: a[3], life: 1.4, vy: -40 });
+    else damageNumbers.push({ x: a[0], y: a[1], value: a[2], color: a[3], life: 0.8, vy: -55 });
+  }
+  const s = Number(p && p.shake) || 0;
+  if (s > shake) shake = s;
+}
+
+// 把渲染需要的字段挑出来（不传判定用的计时器/集合，省带宽；坐标压到 1 位小数）
+const r1 = v => Math.round(v * 10) / 10;
+function netSnapshot() {
+  return {
+    t: r1(gameTime), wave, level, xp: r1(xp), xpToNext,
+    kills, runCoins, difficulty: r1(difficulty), bossKills,
+    players: players.map(p => ({
+      id: p.id, name: p.name || '',
+      x: r1(p.squad.x), y: r1(p.squad.y), aim: r1(p.squad.aimAng),
+      hp: r1(p.hp), hpMax: r1(p.hpMax),
+      shield: r1(p.squad.shield), shieldMax: p.squad.shieldMax,
+      soldiers: p.soldiers.map(s => [r1(s.x), r1(s.y)]),
+      weapon: (p.weapons[0] && p.weapons[0].type) || null,
+    })),
+    enemies: enemies.map(e => [e.type, r1(e.x), r1(e.y), r1(e.hp), r1(e.maxHp), e.r, r1(e.facing || 0),
+      (e.frostT > 0 ? 1 : 0) | (e.burnT > 0 ? 2 : 0) | (e.freezeT > 0 ? 4 : 0),
+      e.kind || '', e.elite ? 1 : 0]),
+    bullets: bullets.map(b => [r1(b.x), r1(b.y), b.r, b.color]),
+    drops: drops.map(d => [r1(d.x), r1(d.y), d.value, d.r]),
+    enemyBullets: enemyBullets.map(b => [r1(b.x), r1(b.y), b.r, b.color]),
+  };
+}
+
+// ==================== 客机侧 ====================
+
+// 收到房主的开局消息：按同一份世界数据进对局
+function netGuestBegin(p) {
+  if (netRole && netRole !== 'guest') return;
+  netPeer = p.host || '';
+  netRole = 'guest';
+  reset(p.seed);                                // 同一 seed -> 两边生成同一张地图（世界只走 rngWorld）
+  runMode = p.mode || runMode;
+  terrainCache = null;
+  // 槽位重排：0 = 房主（远端），1 = 我（本机）。reset() 之后 P1 就是「我」，所以改它的 id 落到槽位 1，
+  // 前面补一个空壳的房主槽位；小兵身上的 owner 也要跟着改，否则会被算到房主头上。
+  const me = P1;
+  me.id = 1;
+  me.name = currentUser;
+  me.soldiers.forEach(s => { s.owner = 1; });
+  const host = makePlayer(0);
+  host.name = p.host || '房主';
+  host.squad = {
+    x: WORLD.w / 2, y: WORLD.h / 2,
+    shield: 0, shieldMax: 0, shieldRegenTimer: 0, invulnT: 0, invulnCdT: 0, aimAng: -Math.PI / 2,
+  };
+  players = [host, me];
+  activePlayer = me;                            // 全局仍然代表「我」
+  captureCtx(me);
+  netSnap = null;
+  netLastInput = '';
+  setState('playing');
+  initAudio();
+  startMusic();
+  applyOrientation();
+  closeFriends();                               // 开局后收起面板，别盖住战场
+  netSend('run:go', {});                        // 告诉房主「我到位了」
+  coopStatusSet(`对局开始：房主 ${netPeer}`);
+}
+
+// 客机的时间片：**不跑模拟**，只把最新快照贴回全局，然后照常渲染
+function netGuestTick() {
+  netApplySnap();
+  updateCamera();
+}
+
+// 客机：每帧按最新快照把世界「贴」回全局（渲染层只读，所以直接调 render() 即可）
+function netApplySnap() {
+  if (!netSnap) return;
+  const s = netSnap;
+  const lerp = (cur, want, k) => cur + (want - cur) * k;
+  const k = Math.min(1, 0.35);
+  (s.players || []).forEach(sp => {
+    const p = players[sp.id];
+    if (!p) return;
+    const isLocal = p === activePlayer;
+    const sq = isLocal ? squad : p.squad;
+    const wasFirst = sq.__net;
+    if (wasFirst) { sq.x = lerp(sq.x, sp.x, k); sq.y = lerp(sq.y, sp.y, k); }
+    else { sq.x = sp.x; sq.y = sp.y; sq.__net = true; }
+    sq.aimAng = sp.aim;
+    p.hp = sp.hp; p.hpMax = sp.hpMax;
+    if (isLocal) { squadHp = sp.hp; squadMaxHp = sp.hpMax; } else { p.hp = sp.hp; p.hpMax = sp.hpMax; }
+    sq.shield = sp.shield; sq.shieldMax = sp.shieldMax;
+    const arr = isLocal ? soldiers : p.soldiers;
+    const want = sp.soldiers || [];
+    if (arr.length !== want.length) {
+      arr.length = 0;
+      want.forEach(() => arr.push({ x: 0, y: 0, owner: sp.id }));
+    }
+    arr.forEach((sd, i) => {
+      const t = want[i];
+      if (!t) return;
+      if (sd.__net) { sd.x = lerp(sd.x, t[0], k); sd.y = lerp(sd.y, t[1], k); }
+      else { sd.x = t[0]; sd.y = t[1]; sd.__net = true; }
+      sd.owner = sp.id;
+    });
+  });
+  // 世界实体：直接替换成快照内容（绘制函数只读字段，缺字段会是 undefined，不会抛）
+  enemies = (s.enemies || []).map(a => ({
+    type: a[0], x: a[1], y: a[2], hp: a[3], maxHp: a[4], r: a[5], facing: a[6],
+    frostT: (a[7] & 1) ? 1 : 0, burnT: (a[7] & 2) ? 1 : 0, freezeT: (a[7] & 4) ? 1 : 0,
+    kind: a[8] || undefined, elite: !!a[9], dead: false,
+  }));
+  bullets = (s.bullets || []).map(a => ({ x: a[0], y: a[1], r: a[2], color: a[3], vx: 0, vy: 0 }));
+  drops = (s.drops || []).map(a => ({ x: a[0], y: a[1], value: a[2], r: a[3] }));
+  enemyBullets = (s.enemyBullets || []).map(a => ({ x: a[0], y: a[1], r: a[2], color: a[3] }));
+  gameTime = s.t; wave = s.wave; kills = s.kills; runCoins = s.runCoins;
+  level = s.level; xp = s.xp; xpToNext = s.xpToNext;
+}
+
+// 客机：把本机的移动意图上行（只在值变化时才发，省流量）
+let netLastInput = '';
+function netSendInput() {
+  const v = { x: Math.round(joyVec().x * 100) / 100, y: Math.round(joyVec().y * 100) / 100 };
+  const key = v.x + ',' + v.y;
+  if (key === netLastInput) return;
+  netLastInput = key;
+  netSend('in', v);
+}
+
 document.getElementById('btn-friends').onclick = openFriends;
 document.getElementById('chat-close').onclick = () => {
   closeChat();
@@ -11870,6 +12700,7 @@ document.getElementById('coop-input').addEventListener('keydown', e => {
 });
 document.getElementById('coop-ready').onclick = coopToggleReady;
 document.getElementById('coop-leave').onclick = coopLeave;
+document.getElementById('coop-fight').onclick = netHostBegin;   // V1.37：房主开局（双人对战）
 
 // 标签切换
 document.querySelectorAll('.tab').forEach(btn => {
@@ -11971,7 +12802,10 @@ document.getElementById('btn-play').onclick = () => {
   if (meta.run) continueRun();      // 有上把进度：回到当时的暂停 / 设置界面
   else startGame();
 };
-document.getElementById('btn-restart').onclick = startGame;
+document.getElementById('btn-restart').onclick = () => {
+  if (netRole) { netLeaveMatch(); return; }    // 联机局：回大厅（「再来一局」要房主在房间里重新开局）
+  startGame();
+};
 document.getElementById('btn-pause').onclick = pauseGame;
 const guideSkipBtn = document.getElementById('guide-skip');
 if (guideSkipBtn) guideSkipBtn.onclick = skipGuide;      // 首局引导：一键跳过整段（V1.35）
@@ -11998,16 +12832,23 @@ document.addEventListener('click', e => {
 }, true);
 document.getElementById('btn-aim').onclick = cycleAimMode;      // 自动攻击目标优先级（V1.31）
 document.getElementById('btn-resume').onclick = resumeGame;
-document.getElementById('btn-newgame').onclick = startGame;
+document.getElementById('btn-newgame').onclick = () => {
+  if (netRole) { netLeaveMatch(); return; }    // 联机局：回大厅，不在这儿新开一局单人
+  startGame();
+};
 document.getElementById('btn-reroll').onclick = rerollUpgrades;
 document.getElementById('skill-slow').onclick = () => useSkill('slow');
 document.getElementById('btn-quit').onclick = () => {
+  // 联机局不能「存进度后回主菜单」（对局快照只存当前生效玩家那套上下文，双人局本来就不能续玩）：
+  // 改成通知队友并回大厅。
+  if (netRole) { netLeaveMatch(); return; }
   saveRun();                        // 返回主菜单：保留上把进度
   stopMusic();
   renderMenu();
   showMenu();
 };
 document.getElementById('btn-change').onclick = () => {
+  if (netRole) { netLeaveMatch(); return; }
   stopMusic();
   renderMenu();
   showMenu();
@@ -12717,8 +13558,7 @@ function devInitHud() {
       return;
     }
     devUpgradeFromPause = fromPause;
-    level++;
-    openUpgrade();
+    beginLevelUp();    // 与「经验满级」同一条入口：双人时会给每名玩家各抽一份（含客机）
     devHudStatus(fromPause ? '已从暂停中打开升级（选完自动回到暂停）' : '已触发升级选卡');
   });
   on('dev-xp-add', () => {
