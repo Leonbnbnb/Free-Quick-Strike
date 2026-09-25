@@ -479,7 +479,7 @@
             </div>
           </div>
 
-          <p class="dim coop-note">房主点「开始双人对战」即可开局。同步内核仍在打磨：客机看得到战场、能操控自己那条小队、升级时两人各抽各的卡、打完也能看到结算页、打怪有伤害数字 / 震屏 / 打击音效与顿帧；还没做的是断线重连、双人难度放大与合作榜。</p>
+          <p class="dim coop-note">房主点「开始双人对战」即可开局。同步内核仍在打磨：客机看得到战场、能操控自己那条小队、升级时两人各抽各的卡、打怪有伤害数字 / 震屏 / 打击音效与顿帧、打完两边都能看到结算页（各自的伤害与击杀分开算）；还没做的是断线重连、双人难度放大与合作榜。</p>
           <p id="coop-status" class="dim coop-status" role="status"></p>
         </div>
       </div>
@@ -543,6 +543,8 @@
         <div class="eyebrow" id="go-eyebrow">ADVENTURE COMPLETE</div>
         <h2 id="go-title">冒险暂告一段落</h2>
         <p id="go-stats"></p>
+        <!-- V1.37：按玩家拆的战绩（单人局一行「本局」，双人局分「你 / 队友」） -->
+        <div id="go-versus" class="go-versus hidden"></div>
         <!-- V1.35：阵亡原因 + 本局学到的机制（通关时不显示） -->
         <p id="go-cause" class="go-cause hidden"></p>
         <div id="go-learned" class="go-learned hidden"></div>

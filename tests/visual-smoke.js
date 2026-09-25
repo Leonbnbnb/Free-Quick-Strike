@@ -345,6 +345,56 @@ async function visualChecks() {
     netOnEnd({ left: true });
     assert(state === 'menu' && players.length === 1 && P1.id === 0 && !P1.pendingPick,
       '对局中对方收场 → 退回大厅，槽位还原成单人、待选清空');
+    // V1.37：结算页按玩家拆 —— 伤害 / 击杀记在「出手的那个人」头上（客机这才看得到自己打了多少）
+    visualSetup(); startGame(); state = 'playing';
+    coopSpawnLocalAlly();
+    players[0].name = '房主甲'; players[1].name = '客机乙';
+    players[0].dmgDealt = 0; players[1].dmgDealt = 0;
+    players[0].killsCount = 0; players[1].killsCount = 0;
+    enemies = []; enemyBullets = [];
+    spawnEnemy('grunt', squad.x + 60, squad.y);
+    const dummy = enemies[enemies.length - 1];
+    dummy.hp = dummy.maxHp = 1e6;
+    hitEnemy(dummy, 100, 0, 0);
+    const dHp0 = players[0].dmgDealt;
+    assert(dHp0 > 0 && players[1].dmgDealt === 0, '直击伤害记在「当前生效玩家」头上（不串到队友）');
+    withCtx(players[1], () => hitEnemy(dummy, 250, 0, 0));
+    assert(players[1].dmgDealt > 0 && players[0].dmgDealt === dHp0, '在客机上下文里打出的伤害记在客机头上');
+    withCtx(players[1], () => { dummy.hp = 1; hitEnemy(dummy, 500, 0, 0); });
+    assert(players[1].killsCount === 1 && players[0].killsCount === 0, '击杀也记在出手的人头上');
+    // DoT（点燃 / 割裂）在世界相位按 dt 结算，那时没有上下文 —— 靠施加时记在敌人身上的 burnBy 归属
+    enemies = []; enemyBullets = [];
+    spawnEnemy('grunt', squad.x + 60, squad.y);
+    const dot = enemies[enemies.length - 1];
+    dot.hp = dot.maxHp = 1e6;
+    players[0].dmgDealt = 0; players[1].dmgDealt = 0;
+    players[1].killsCount = 0;
+    withCtx(players[1], () => applyBurn(dot, 10, 3));
+    assert(dot.burnBy === 1, '点燃记下了施加者（世界相位结算时才知道该算谁的）');
+    for (let i = 0; i < 30; i++) { gameTime += 1 / 60; updateEnemies(1 / 60); }
+    assert(players[1].dmgDealt > 0 && players[0].dmgDealt === 0, '点燃的持续伤害记在挂点燃的那位玩家头上');
+    // 结算页：联机局分「你 / 队友」两行；房主把这份战绩随 run:end 一起下发
+    players[0].dmgDealt = 12345; players[0].killsCount = 20;
+    players[1].dmgDealt = 6789; players[1].killsCount = 7;
+    netRole = 'host';
+    gameOver(false);
+    const vsHost = document.getElementById('go-versus');
+    assert(!vsHost.classList.contains('hidden') && vsHost.textContent.includes('你')
+      && vsHost.textContent.includes('12,345') && vsHost.textContent.includes('客机乙')
+      && vsHost.textContent.includes('6,789'), '联机结算页按玩家拆出「你 / 队友」两行（伤害带千分位）');
+    assert(sentEnd.some(e => Array.isArray(e.stats) && e.stats.length === 2 && e.stats[1].k === 7),
+      '房主把按玩家拆的战绩随 run:end 一起下发（客机自己算不出来）');
+    // 客机侧：用房主下发的 stats 渲染，且「我」认的是 id 1 那条（客机 players[1].id === 1）
+    netRole = 'guest';
+    netOnEnd({
+      won: false, wave: 7, kills: 42, level: 5, time: 96, coins: 123, cause: 'melee', peerCause: 'shot',
+      stats: [{ id: 0, name: '房主甲', d: 900, k: 9 }, { id: 1, name: '客机乙', d: 400, k: 4 }],
+    });
+    const vsGuest = document.getElementById('go-versus');
+    const vsGuestText = vsGuest.textContent;
+    assert(!vsGuest.classList.contains('hidden') && vsGuestText.indexOf('400') >= 0 && vsGuestText.indexOf('900') >= 0
+      && vsGuestText.indexOf('房主甲') >= 0, '客机的结算页也按玩家拆（用房主下发的战绩，队友那行写名字）');
+    netOnEnd({ left: true });
     // V1.37：打击反馈同步 —— 房主攒伤害数字，客机摆到自己那边（客机不跑模拟，否则打怪没有任何反馈）
     netRole = 'host';
     netFxQueue.length = 0;

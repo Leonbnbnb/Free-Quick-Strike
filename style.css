@@ -1796,6 +1796,30 @@ input[type='checkbox'] {
   line-height: 1.9;
 }
 
+/* 按玩家拆的战绩（V1.37）：单人局一行「本局」，双人局分「你 / 队友」—— 客机这才看得到自己打了多少 */
+.go-versus {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #11262ab0;
+  text-align: left;
+}
+
+.go-vs-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #c8dbcd;
+  font-size: 12px;
+  line-height: 1.9;
+}
+
+.go-vs-row b {
+  color: var(--mint);
+  font-weight: 600;
+}
+
 /* 阵亡原因（V1.35）：一句话说清「是什么打死的」，别让新玩家只看到「你死了」 */
 .go-cause {
   margin-bottom: 14px;

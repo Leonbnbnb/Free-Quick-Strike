@@ -140,6 +140,11 @@ function fmtTime(sec) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
+// 结算页的累计数字（伤害常到六位数）：加千分位更好读
+function fmtNum(n) {
+  return String(Math.round(n || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
 // 宠物进化阶段（V1.31）：幼体 → 成体 → 究极体。
 // 满级（Lv.20）或满星（★5）判为究极体；过半等级判为成体。只影响表现，不影响数值。
 function petStage(d) {
@@ -4029,6 +4034,10 @@ function makePlayer(id) {
     lightningCdT: 0, lightningPending: false,
     hurtBy: {}, lastHurt: '',
     petRunExp: 0,
+    // 本局「这名玩家打出的伤害 / 它击杀的敌人」（V1.37 结算页按玩家拆）。
+    //   **只增不减的累计值，所以直接写槽位、不进全局镜像**（不像 stats / squad 那种「一份状态」）——
+    //   这样跨玩家记账不需要 withCtx 切换，也不会互相覆盖。归属规则见 creditPlayer()。
+    dmgDealt: 0, killsCount: 0,
     // V1.37：本次升级待选的卡（各自选卡用）。**不要塞进网络快照** —— 卡对象里带 apply 闭包，
     // 序列化不了；客机那边只需要房主抽好的 id + 文案（见 netGuestPick）。
     pendingPick: null,
@@ -4078,6 +4087,24 @@ function withCtx(p, fn) {
 // 解析不到（单人局的旧快照、或该玩家已离场）一律退回 P1，绝不返回 undefined。
 function playerOf(s) { return (s && players[s.owner]) || P1; }
 function idOfActive() { return activePlayer ? activePlayer.id : 0; }
+
+// 给某位玩家记一笔「这一击算谁的」。归属规则（V1.37 结算页按玩家拆）：
+//   · **直击 / 召唤物 / 宠物 / 子弹** —— 这些都在 `withCtx(那名玩家, …)` 里跑（见 update 的两个相位、
+//     以及 updateBullets / updatePetFx 按 owner 推进），所以「当前生效玩家」就是出手的人。
+//   · **DoT（点燃 / 割裂）** —— 在世界相位（updateEnemies）按 dt 结算、那时没有上下文，
+//     所以由施加者记在敌人身上（`e.burnBy` / `e.bleedBy`，见 applyBurn / applyBleed），记账时显式传进来。
+//   解析不到就退回 P1（与 playerOf 同一口径）—— 单人局恒为 P1，双人下极少数无主来源算在房主头上。
+function creditPlayer(id, dmg, killed) {
+  const p = players[id] || P1;
+  if (!p) return;
+  if (dmg > 0) p.dmgDealt += dmg;
+  if (killed) p.killsCount++;
+}
+
+// 结算页要的那份「按玩家拆的战绩」（房主侧实测；客机侧由房主随 run:end 下发）
+function playerStats() {
+  return players.map(p => ({ id: p.id, name: p.name || '', d: Math.round(p.dmgDealt), k: p.killsCount }));
+}
 
 // 取某个玩家的字段。**当前生效玩家的存储就是那些全局变量本身** —— 直接改全局的地方
 // （reset / restoreRun）不会回头同步对象字段，所以对 activePlayer 一律走全局，避免读到陈旧值。
@@ -4205,6 +4232,7 @@ function reset(seed) {
   players = [P1];
   activePlayer = P1;
   P1.pendingPick = null;    // 新对局不留上一局的待选（P1 是复用对象，会跨局带过来）
+  P1.dmgDealt = 0; P1.killsCount = 0;   // 战绩同样清零（客机那条 P2 是新 makePlayer 造的，本来就是 0）
 
   // 应用局外装备（V1.31：武器 / 护甲 / 饰品 ×2 的**主属性** + **随机词条**）
   // gearBuff() 已经把「主属性」与「词条」叠进同一份累加器（见 MAIN_STAT_KEYS），这里只是把它写进 stats。
@@ -4850,6 +4878,7 @@ function triggerLightning() {
 function strikeEnemy(e, dmg, hit) {
   if (stats.vuln > 0) dmg *= 1 + stats.vuln;      // 易伤同样作用于雷电
   e.hp -= dmg;
+  creditPlayer(idOfActive(), dmg, false);         // 结算页战绩（落雷直击不走 hitEnemy，得在这里单记）
   spawnDamageNumber(e.x, e.y, dmg, '#9de0ff');
   sfxThunder();
   spawnLightningBolt(e.x, e.y, stats.lightningSplashR || 0);
@@ -6086,6 +6115,7 @@ function applyBurn(e, burnDps, burnTime) {
   e.burnDps = (burnDps + (stats.fireFlat || 0)) * (1 + (stats.burnDamage || 0)) * stats.elementalDamage * f;
   e.burnT = ((burnTime || BURN_TIME) + (stats.fireBurnTime || 0)) * f * statusDur();
   e.resistBurnT = statusResistTime(e);
+  e.burnBy = idOfActive();     // 记账用：DoT 在世界相位结算，得先记住「是谁挂上去的」
   return true;
 }
 
@@ -6095,6 +6125,7 @@ function pushBurnStacks(e, n) {
   const dps = BURN_DPS * (1 + (stats.burnDamage || 0)) * stats.elementalDamage * f;
   if (!e.burnExtra) e.burnExtra = [];
   for (let i = 0; i < n; i++) e.burnExtra.push({ dps, t: BURN_TIME * f * statusDur() });
+  e.burnBy = idOfActive();     // 记账用（额外层也走同一位施加者）
 }
 
 // 当前点燃总伤害（主层 + 爆裂的额外层）
@@ -6112,6 +6143,7 @@ function applyBleed(e, dps, time) {
   const f = e.type === 'boss' ? 0.5 : 1;
   e.bleedDps = dps * f;
   e.bleedT = time || BLEED_TIME;
+  e.bleedBy = idOfActive();    // 记账用（割裂同样是世界相位结算的 DoT）
   return true;
 }
 
@@ -6128,10 +6160,12 @@ function tryExecute(e) {
   if (e.type === 'boss' || e.type === 'elite') {
     const dmg = e.maxHp * EXECUTE_HEAVY_HP;
     e.hp -= dmg;
+    creditPlayer(idOfActive(), dmg, false);      // 结算页战绩（处决伤害也不走 hitEnemy）
     spawnDamageNumber(e.x, e.y - e.r - 10, dmg, '#ff6b6b');
     spawnFloatText(e.x, e.y - e.r - 26, '死神降临', '#ff8080');
     if (e.hp <= 0) killEnemy(e);
   } else {
+    creditPlayer(idOfActive(), e.hp, false);     // 处决普通怪：把它剩下的血量记进战绩
     spawnFloatText(e.x, e.y - e.r - 16, '处决', '#ff6b6b');
     spawnParticles(e.x, e.y, '#ff6b6b', 12);
     e.hp = 0;
@@ -6196,6 +6230,7 @@ function rollFrostbite(e) {
   const pct = e.type === 'boss' ? 0.01 : (e.type === 'elite' ? 0.05 : FROSTBITE_HP[lv - 1]);
   const dmg = e.hp * pct;
   e.hp -= dmg;
+  creditPlayer(idOfActive(), dmg, false);          // 结算页战绩（冻伤也不走 hitEnemy）
   spawnDamageNumber(e.x, e.y - e.r - 10, dmg, '#bfe8ff');
   spawnFloatText(e.x, e.y - e.r - 26, '冻伤', '#8fe3ff');
   if (e.hp <= 0) killEnemy(e);
@@ -6249,6 +6284,7 @@ function hitEnemy(e, dmg, burnDps, burnTime) {
   const shielded = e.shieldMax > 0 && e.shield > 0;
   if (shielded && stats.sunder > 0) dmg *= 1 + stats.sunder;   // 装备「裂甲」：对带护盾的敌人加伤
   addDps(dmg);                                                 // 实时 DPS（V1.31 调试）：按结算前伤害统计
+  creditPlayer(idOfActive(), dmg, false);                      // 结算页战绩：这一击算出手的人（含打在护盾上的部分，口径与 DPS 一致）
   const god = devGodBlocks(e);                                 // 调试：怪物无敌
   if (shielded && !god) {
     const absorb = Math.min(e.shield, dmg);
@@ -6280,10 +6316,14 @@ function hitEnemy(e, dmg, burnDps, burnTime) {
   if (e.hp <= 0) killEnemy(e);
 }
 
-function killEnemy(e) {
+// byId = 这次击杀记在谁头上（玩家 id）。不传就按「当前生效玩家」——
+//   直击 / 召唤物 / 宠物 / 子弹都在 withCtx 里跑，所以那个默认值是对的；
+//   只有「世界相位按 dt 结算的 DoT」（点燃 / 割裂）必须显式传施加者（见 updateEnemies）。
+function killEnemy(e, byId) {
   if (e.dead) return;
   e.dead = true;
   kills++;
+  creditPlayer(byId === undefined ? idOfActive() : byId, 0, true);
   runCoins += coinDrop(e.type) * (gearCoinMul || 1);   // 装备「财富」词条 / 幸运币在此放大
   shake = Math.min(10, shake + (e.type === 'boss' ? 8 : 1.5));
   sfxKill();
@@ -6863,21 +6903,25 @@ function updateEnemies(dt) {
   for (const e of enemies) {
     const burn = burnTotalDps(e);
     if (burn > 0) {
-      e.hp -= burn * dt;
+      const dealt = burn * dt;
+      e.hp -= dealt;
+      creditPlayer(e.burnBy, dealt, false);      // 世界相位没有上下文，记账靠施加时记下的 burnBy
       if (e.burnT > 0) e.burnT = Math.max(0, e.burnT - dt);
       if (e.burnExtra && e.burnExtra.length) {
         for (const b of e.burnExtra) b.t -= dt;
         e.burnExtra = e.burnExtra.filter(b => b.t > 0);
       }
-      if (e.hp <= 0) { killEnemy(e); continue; }
+      if (e.hp <= 0) { killEnemy(e, e.burnBy); continue; }
     }
 
     // 割裂（镰刀）：每秒结算一次 DoT，不进任何伤害乘区
     if (e.bleedT > 0) {
-      e.hp -= (e.bleedDps || 0) * dt;
+      const dealt = (e.bleedDps || 0) * dt;
+      e.hp -= dealt;
+      creditPlayer(e.bleedBy, dealt, false);
       e.bleedT = Math.max(0, e.bleedT - dt);
       if (e.bleedT <= 0) e.bleedDps = 0;
-      if (e.hp <= 0) { killEnemy(e); continue; }
+      if (e.hp <= 0) { killEnemy(e, e.bleedBy); continue; }
     }
 
     // 剑印（飞剑）：计时递减，归零后不再提供易伤
@@ -7469,6 +7513,8 @@ function spawnEnemy(type, px, py, opts = {}) {
     atkCd: 0, shootCd: def.shootInterval || 0, burstCd: t === 'boss' ? 2.5 : 0,
     burnDps: 0, burnT: 0, burnExtra: [], scytheT: 0, kbx: 0, kby: 0, kbT: 0,
     bleedDps: 0, bleedT: 0, execT: -1e9, markT: 0,
+    // DoT 的施加者（玩家 id）：世界相位按 dt 结算时靠它记账（见 creditPlayer），0 = 本机
+    burnBy: 0, bleedBy: 0,
     frostT: 0, frostMul: 1, freezeT: 0,
     resistBurnT: 0, resistFrostT: 0, resistFreezeT: 0,
     shield, shieldMax: shield, shieldRegenT: 0,
@@ -10650,7 +10696,10 @@ function gameOver(won) {
     petText = ` · 宠物熟练度 +${Math.round(petRunExp)}` + (up > 0 ? `（${PET_DEFS[id].name} 升到 Lv.${d.lv}）` : '');
   }
   saveMeta();
-  renderGameOverPanel({ win, wave, kills, level, time: gameTime, coins: Math.round(runCoins), petText, causeKey: lastHurt });
+  renderGameOverPanel({
+    win, wave, kills, level, time: gameTime, coins: Math.round(runCoins), petText, causeKey: lastHurt,
+    stats: playerStats(), meId: localPlayer().id,     // 按玩家拆的战绩（V1.37）：单人局一行、双人局分「你 / 队友」
+  });
   setState('gameover');     // 数字填好后再切状态，避免闪一下空结算面板
   // 双人（V1.37）：把结果下发给客机 —— 客机不跑模拟，没有这一步它只会停在冻结的战场上。
   // **账号结算只在房主这一侧做**（金币 / 成绩 / 宠物熟练度都是房主那份数据）。
@@ -10660,6 +10709,9 @@ function gameOver(won) {
       won: win, wave: cleared, kills, level, time: gameTime, coins: Math.round(runCoins),
       cause: lastHurt || '',                     // 房主自己的阵亡原因
       peerCause: (foe && foe.lastHurt) || '',    // 客机自己的（扣血按 owner 记在各人账上，见 damageSoldier）
+      // 按玩家拆的战绩也一起下发 —— 客机没跑过模拟，这两个数它自己算不出来。
+      // （不传「谁是房主」：两边各自用 localPlayer().id 认自己那条，见 renderGameOverPanel。）
+      stats: playerStats(),
     });
   }
 }
@@ -10667,6 +10719,7 @@ function gameOver(won) {
 // 结算页的统一渲染（房主侧传实测数据；客机侧用房主下发的数据，`fromNet: true`）
 //   阵亡原因：房主侧取最后一次扣到血的来源（`lastHurt`）；若本局重开过 / 读档续玩导致统计为空，就说「力竭而亡」。
 //   学到的机制：本局实际触发过的系统（移动 / 拾取 / 升级卡 / 首领奖励…），最多列 6 条 —— 这份统计只有房主侧有。
+//   按玩家拆的战绩（`stats` + `meId`）：单人局一行「本局」，双人局分「你 / 队友」；客机那份来自房主下发。
 //   联机局的两处差异：金币与成绩由房主那侧结算（客机不重复结算）；出口只留「回到大厅」（「再来一局」要房主在房间里重新开局）。
 function renderGameOverPanel(res) {
   const win = !!res.win;
@@ -10676,6 +10729,25 @@ function renderGameOverPanel(res) {
   document.getElementById('go-stats').textContent =
     `波次 ${res.wave} · 击杀 ${res.kills} · 等级 ${res.level} · 时长 ${fmtTime(res.time)}${res.petText || ''}`
     + (win ? `（标准模式 ${STANDARD_WAVES} 波全清，无尽模式已开放）` : '');
+  // 按玩家拆的战绩：`meId` 各端自己算（房主 players[0] / 客机 players[1]，见 localPlayer），
+  //   所以房主下发的载荷里不需要带「谁是房主」。
+  const vs = document.getElementById('go-versus');
+  if (vs) {
+    const list = Array.isArray(res.stats) ? res.stats : [];
+    const meId = res.meId === undefined ? 0 : res.meId;
+    const me = list.find(s => s.id === meId);
+    const others = list.filter(s => s.id !== meId);
+    if (me) {
+      const row = (label, s) => `<div class="go-vs-row"><b>${label}</b> <span>伤害 ${fmtNum(s.d)} · 击杀 ${s.k}</span></div>`;
+      // 单人局没有队友，就别写「你」了 —— 直接说「本局」
+      vs.innerHTML = [row(others.length ? '你' : '本局', me)]
+        .concat(others.map(o => row(o.name || '队友', o))).join('');
+      vs.classList.remove('hidden');
+    } else {
+      vs.innerHTML = '';
+      vs.classList.add('hidden');
+    }
+  }
   const causeEl = document.getElementById('go-cause');
   if (win) {
     causeEl.textContent = '';
@@ -12499,10 +12571,12 @@ function netOnEnd(p) {
     return;
   }
   // 客机侧：房主下发的这一局结果 —— 客机自己的模拟没跑过，所以数字全用房主那份；
-  // 阵亡原因优先用「客机自己那一份」（房主替它记着，扣血按 owner 分账）
+  // 阵亡原因优先用「客机自己那一份」（房主替它记着，扣血按 owner 分账）；
+  // 按玩家拆的战绩也来自房主下发（`p.stats`），「我」是哪一条由本端自己认（客机 localPlayer() 恒为 id 1）。
   renderGameOverPanel({
     win: !!p.won, wave: Number(p.wave) || 0, kills: Number(p.kills) || 0, level: Number(p.level) || 0,
     time: Number(p.time) || 0, coins: Number(p.coins) || 0, causeKey: p.peerCause || p.cause || '', fromNet: true,
+    stats: p.stats, meId: localPlayer().id,
   });
   setState('gameover');
   coopStatusSet(`这一局结束了（房主 ${netPeer} 结算）`);
